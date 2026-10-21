@@ -49,10 +49,12 @@ uv run gwc serve --debug  # Dash dev server with hot reload
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\install_autostart.ps1             # install
 powershell -ExecutionPolicy Bypass -File scripts\install_autostart.ps1 -StartNow   # install and start now
-powershell -ExecutionPolicy Bypass -File scripts\install_autostart.ps1 -Uninstall  # remove
+powershell -ExecutionPolicy Bypass -File scripts\install_autostart.ps1 -Restart    # restart, e.g. after pulling new code
+powershell -ExecutionPolicy Bypass -File scripts\install_autostart.ps1 -Stop       # stop the app
+powershell -ExecutionPolicy Bypass -File scripts\install_autostart.ps1 -Uninstall  # stop and remove
 ```
 
-Use `-StartNow` only after stopping any copy you started by hand, since both would need port 8060. Output goes to `data/logs/gwc.log`. To stop or restart the background copy, use **Task Scheduler → Garmin Weight Coach → End / Run**.
+Use `-StartNow` only after stopping any copy you started by hand, since both would need port 8060. Output goes to `data/logs/gwc.log`. Stop or restart it with `-Stop` / `-Restart`, not Task Scheduler's **End**: that only ends the hidden console wrapper, and uv and the app keep running. `-Stop` also stops a copy started from a terminal.
 
 ## Phone access with Tailscale
 
