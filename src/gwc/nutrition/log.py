@@ -1,5 +1,6 @@
 """Logging food and reading a food day's entries and totals."""
 
+import re
 from datetime import date, datetime
 
 from sqlalchemy import and_, or_, select
@@ -92,6 +93,35 @@ def update_entry(
     entry.eaten_at = eaten_at
     entry.food_day_override = food_day_override
     entry.note = note or None
+    return entry
+
+
+def _scaled_label(label: str, factor: float, grams: float) -> str:
+    """Rescale a unit label: '150 g' -> '75 g', '1 burrito (350 g)' -> '0.5 × 1 burrito (175 g)'."""
+    core, grams_suffix = re.subn(r" \([\d,.]+ g\)$", "", label)
+    if m := re.fullmatch(r"([\d.]+) (g|oz)", core):
+        core = unit_label(round(float(m[1]) * factor, 2), m[2])
+    else:
+        count = 1.0
+        if m := re.fullmatch(r"([\d.]+) × (.+)", core):
+            count, core = float(m[1]), m[2]
+        core = unit_label(round(count * factor, 2), core)
+    return f"{core} ({grams:.0f} g)" if grams_suffix else core
+
+
+def scale_entry(s: Session, entry_id: int, factor: float) -> FoodLog:
+    """Multiply an entry's portion (ate half, had two) without touching its other fields."""
+    entry = s.get(FoodLog, entry_id)
+    if entry is None:
+        raise ValueError("Entry not found")
+    if factor <= 0:
+        raise ValueError("Multiplier must be positive")
+    _apply(entry, {k: getattr(entry, k) * factor for k in NUTRIENT_KEYS})
+    entry.grams *= factor
+    if entry.amount:
+        entry.amount *= factor
+    if entry.unit_label:
+        entry.unit_label = _scaled_label(entry.unit_label, factor, entry.grams)
     return entry
 
 

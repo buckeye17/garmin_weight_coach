@@ -268,6 +268,45 @@ def test_update_and_delete_entry(db):
         assert s.scalars(select(FoodLog)).all() == []
 
 
+def test_scale_entry(db):
+    with session_scope() as s:
+        egg = _egg(s)
+        unit, _ = foods.default_unit(egg)
+        two = log.log_food(
+            s, food_id=egg.id, amount=2, unit=unit, eaten_at=utc(2026, 10, 20, 6, 0), tz="UTC"
+        )
+        log.scale_entry(s, two.id, 0.5)
+        assert (two.grams, two.kcal, two.unit_label) == (50, 71.5, "1 large")
+        assert log.entry_unit(s, two) == (1, unit)
+        log.scale_entry(s, two.id, 1.5)
+        assert two.unit_label == "1.5 × 1 large"
+
+        by_g = log.log_food(
+            s, food_id=egg.id, amount=150, unit="g", eaten_at=utc(2026, 10, 20, 6, 0), tz="UTC"
+        )
+        log.scale_entry(s, by_g.id, 2)
+        assert (by_g.grams, by_g.unit_label) == (300, "300 g")
+
+        meal = FoodLog(
+            eaten_at=utc(2026, 10, 20, 12, 0),
+            tz="UTC",
+            description="Burrito",
+            grams=350,
+            amount=350,
+            unit_label="1 burrito (350 g)",
+            source=LogSource.AI,
+            kcal=900,
+        )
+        s.add(meal)
+        s.flush()
+        log.scale_entry(s, meal.id, 0.5)
+        assert (meal.kcal, meal.unit_label) == (450, "0.5 × 1 burrito (175 g)")
+        log.scale_entry(s, meal.id, 2)
+        assert meal.unit_label == "1 burrito (350 g)"
+        with pytest.raises(ValueError):
+            log.scale_entry(s, meal.id, 0)
+
+
 def test_entries_for_day_uses_boundaries_and_overrides(db):
     mon, tue = date(2026, 10, 19), date(2026, 10, 20)
     fd = FoodDays(NY, 9, {tue: utc(2026, 10, 20, 8, 15)})  # asleep 04:15 Tue

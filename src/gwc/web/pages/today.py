@@ -28,6 +28,46 @@ from gwc.web.components.log_modal import log_modal
 from gwc.web.components.nutrient_bars import nutrient_bars
 from gwc.web.format import fmt_day
 
+PORTION_PRESETS = [("½", 0.5), ("1½", 1.5), ("2", 2.0)]
+
+
+def _portion_controls() -> dmc.Stack:
+    """Multiply the whole entry: ate half, or had two."""
+    presets = [
+        dmc.Button(
+            f"× {label}",
+            id={"type": "edit-scale", "index": str(factor)},
+            variant="light",
+            size="compact-sm",
+        )
+        for label, factor in PORTION_PRESETS
+    ]
+    custom = dmc.Group(
+        [
+            dmc.NumberInput(
+                id="edit-factor",
+                placeholder="× other",
+                min=0,
+                step=0.25,
+                decimalScale=2,
+                hideControls=True,
+                w=80,
+                size="xs",
+                inputProps={"inputMode": "decimal"},
+            ),
+            dmc.Button("Apply", id="edit-factor-apply", variant="default", size="compact-sm"),
+        ],
+        gap=4,
+        wrap="nowrap",
+    )
+    return dmc.Stack(
+        [
+            dmc.Text("Portion eaten", size="sm", fw=500),
+            dmc.Group([*presets, custom], gap=6),
+        ],
+        gap=4,
+    )
+
 
 def _edit_modal() -> dmc.Modal:
     return dmc.Modal(
@@ -51,6 +91,7 @@ def _edit_modal() -> dmc.Modal:
                     align="flex-end",
                     wrap="nowrap",
                 ),
+                _portion_controls(),
                 when_inputs("edit"),
                 dmc.Select(
                     id="edit-day",
@@ -451,6 +492,7 @@ def quick_add(_clicks):
     Output("edit-day", "data"),
     Output("edit-day", "value"),
     Output("edit-note", "value"),
+    Output("edit-factor", "value"),
     Output("edit-error", "children", allow_duplicate=True),
     Input({"type": "entry-row", "index": ALL}, "n_clicks"),
     prevent_initial_call=True,
@@ -484,6 +526,7 @@ def open_edit(_clicks):
             day_options,
             entry.food_day_override.isoformat() if entry.food_day_override else "auto",
             entry.note or "",
+            "",
             "",
         )
 
@@ -523,6 +566,34 @@ def save_edit(_save, _delete, entry_id, amount, unit, day, clock, day_value, not
                     else date.fromisoformat(day_value),
                     note=note,
                 )
+    except ValueError as e:
+        return no_update, no_update, str(e)
+    return False, (done or 0) + 1, ""
+
+
+@callback(
+    Output("edit-modal", "opened", allow_duplicate=True),
+    Output("edit-done", "data", allow_duplicate=True),
+    Output("edit-error", "children", allow_duplicate=True),
+    Input({"type": "edit-scale", "index": ALL}, "n_clicks"),
+    Input("edit-factor-apply", "n_clicks"),
+    State("edit-factor", "value"),
+    State("edit-entry-id", "data"),
+    State("edit-done", "data"),
+    prevent_initial_call=True,
+)
+def scale_edit(_presets, _apply, custom, entry_id, done):
+    if not entry_id:
+        raise PreventUpdate
+    if ctx.triggered_id == "edit-factor-apply":
+        factor = custom
+    elif clicked := triggered_click():
+        factor = clicked["index"]
+    else:
+        raise PreventUpdate
+    try:
+        with session_scope() as s:
+            log.scale_entry(s, int(entry_id), float(factor or 0))
     except ValueError as e:
         return no_update, no_update, str(e)
     return False, (done or 0) + 1, ""
