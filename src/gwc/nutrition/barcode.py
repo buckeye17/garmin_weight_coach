@@ -263,6 +263,35 @@ def lookup(gtin: str, usda: UsdaClient, off: OpenFoodFactsClient) -> LookupResul
     return result
 
 
+@dataclass
+class Scan:
+    """What a scanned or typed code turned out to be.
+
+    kind: "invalid" (not a product code), "saved" (`food_id`, confirmed before),
+    "store" (an in-store label no database has) or "lookup" (`result`).
+    """
+
+    kind: str
+    gtin: str | None = None
+    food_id: int | None = None
+    food_name: str | None = None
+    result: LookupResult | None = None
+
+
+def resolve(
+    s: Session, raw: str, fmt: str | None, usda: UsdaClient, off: OpenFoodFactsClient
+) -> Scan:
+    gtin = normalize(raw, fmt)
+    if gtin is None:
+        return Scan("invalid")
+    food = saved_food(s, gtin)
+    if food is not None:
+        return Scan("saved", gtin, food_id=food.id, food_name=food.name)
+    if is_store_code(gtin):
+        return Scan("store", gtin)
+    return Scan("lookup", gtin, result=lookup(gtin, usda, off))
+
+
 # --------------------------------------------------------------------------- saved barcodes
 
 

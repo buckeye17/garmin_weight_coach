@@ -1,14 +1,14 @@
 import dash
 import dash_mantine_components as dmc
-from dash import ALL, Input, Output, State, callback, ctx, dcc, no_update
+from dash import ALL, Input, Output, State, callback, clientside_callback, ctx, dcc, no_update
 from dash.exceptions import PreventUpdate
 
 from gwc.db.models import Food, FoodSource
 from gwc.db.session import session_scope
-from gwc.nutrition import foods
+from gwc.nutrition import barcode, foods
 from gwc.nutrition.log import unit_label
 from gwc.nutrition.nutrients import NUTRIENTS
-from gwc.nutrition.service import get_usda
+from gwc.nutrition.service import get_off, get_usda
 from gwc.nutrition.usda import UsdaError, UsdaHit
 from gwc.web.components.common import icon, page_header, triggered_click, unit_select_data
 from gwc.web.components.log_modal import preview_line
@@ -99,9 +99,18 @@ def _recipe_editor() -> dmc.Modal:
                     [
                         dmc.TextInput(id="re-usda-q", placeholder="…or search USDA", flex=1),
                         dmc.Button("Search", id="re-usda-btn", variant="default"),
+                        dmc.ActionIcon(
+                            icon("tabler:barcode", 20),
+                            id="re-scan",
+                            variant="light",
+                            size="input-sm",
+                            **{"aria-label": "Scan an ingredient's barcode"},
+                        ),
                     ],
                     wrap="nowrap",
+                    gap="xs",
                 ),
+                dmc.Text(id="re-scan-msg", size="sm"),
                 dmc.Select(id="re-usda-hit", placeholder="USDA results", data=[], display="none"),
                 dmc.Group(
                     [
@@ -213,6 +222,8 @@ def layout(**_kwargs):
             dcc.Store(id="fe-id"),
             dcc.Store(id="re-id"),
             dcc.Store(id="re-items", data=[]),
+            dcc.Store(id="re-scan-code"),
+            dcc.Store(id="re-scan-js"),
             dcc.Store(id="re-usda-hits"),
             dcc.Store(id="foods-changed", data=0),
             _food_editor(),
@@ -467,6 +478,7 @@ def _ingredient_options(s) -> list[dict[str, str]]:
     Output("re-archive", "display"),
     Output("re-error", "children", allow_duplicate=True),
     Output("re-modal", "title"),
+    Output("re-scan-msg", "children", allow_duplicate=True),
     Input("new-recipe", "n_clicks"),
     Input({"type": "food-edit", "index": ALL}, "n_clicks"),
     prevent_initial_call=True,
@@ -475,7 +487,7 @@ def open_recipe_editor(_new, _edit):
     with session_scope() as s:
         options = _ingredient_options(s)
         if ctx.triggered_id == "new-recipe":
-            return True, None, "", [], None, None, options, "none", "", "New recipe"
+            return True, None, "", [], None, None, options, "none", "", "New recipe", ""
         clicked = triggered_click()
         if clicked is None:
             raise PreventUpdate
@@ -513,6 +525,7 @@ def open_recipe_editor(_new, _edit):
             "block",
             "",
             "Edit recipe",
+            "",
         )
 
 
@@ -562,6 +575,67 @@ def recipe_pick_usda(fdc_id, hits):
         food_id = food.id
         options = _ingredient_options(s)
     return options, str(food_id), "none"
+
+
+clientside_callback(
+    "function (n) { if (n) { window.gwcScanner.open({code: 're-scan-code', msg: 're-scan-msg'}); }"
+    " return window.dash_clientside.no_update; }",
+    Output("re-scan-js", "data"),
+    Input("re-scan", "n_clicks"),
+    prevent_initial_call=True,
+)
+
+
+def scan_message(scan: barcode.Scan) -> tuple[str, str]:
+    """Text and color for the recipe builder's note on a scanned ingredient."""
+    if scan.kind == "invalid":
+        return "That isn't a valid product barcode. Try scanning it again.", "orange"
+    shown = barcode.display(scan.gtin)
+    if scan.kind == "saved":
+        return f"{scan.food_name}: from your saved barcodes.", "dimmed"
+    if scan.kind == "store":
+        return (
+            "That's the store's own label (deli, meat or bakery), so no database has it. "
+            "Search for the food instead.",
+            "orange",
+        )
+    match = scan.result.match
+    if match is None:
+        return (
+            f"Neither USDA nor Open Food Facts has nutrition for barcode {shown}. Add it on "
+            "Add food › Scan with Read label, then pick it here.",
+            "orange",
+        )
+    if match.source == "off":
+        return (
+            f"{match.name}: from Open Food Facts (crowd-sourced; check it against the package).",
+            "dimmed",
+        )
+    return f"{match.name}: from USDA.", "dimmed"
+
+
+@callback(
+    Output("re-food", "data", allow_duplicate=True),
+    Output("re-food", "value", allow_duplicate=True),
+    Output("re-scan-msg", "children", allow_duplicate=True),
+    Output("re-scan-msg", "c"),
+    Input("re-scan-code", "data"),
+    prevent_initial_call=True,
+)
+def recipe_scan(scanned):
+    """Look up a scanned ingredient and select it; a new product is saved to the user's foods."""
+    if not scanned or not scanned.get("code"):
+        raise PreventUpdate
+    with session_scope() as s:
+        scan = barcode.resolve(s, scanned["code"], scanned.get("format"), get_usda(), get_off())
+        text, color = scan_message(scan)
+        food_id = scan.food_id
+        match = scan.result.match if scan.result else None
+        if match is not None:
+            food_id = barcode.save_match(s, match, get_usda()).id
+        if food_id is None:
+            return no_update, no_update, text, color
+        return _ingredient_options(s), str(food_id), text, color
 
 
 @callback(

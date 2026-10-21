@@ -262,29 +262,28 @@ def lookup_code(scanned, _clicks, _submit, typed):
         raw, fmt = typed, None
     if not raw or not raw.strip():
         raise PreventUpdate
-    gtin = barcode.normalize(raw, fmt)
-    if gtin is None:
+    with session_scope() as s:
+        scan = barcode.resolve(s, raw, fmt, get_usda(), get_off())
+    if scan.kind == "invalid":
         note = _note(
             f"“{raw.strip()}” isn't a valid product barcode. Check the digits, or scan it again.",
             "orange",
         )
         return note, None, None, no_update, no_update, "none", None
-    shown = barcode.display(gtin)
-    with session_scope() as s:
-        food = barcode.saved_food(s, gtin)
-        if food is not None:
-            note = _note(f"{food.name} — from your saved barcodes.", "brand")
-            return note, None, None, shown, _open_log(food.id), "none", None
-    if barcode.is_store_code(gtin):
+    shown = barcode.display(scan.gtin)
+    if scan.kind == "saved":
+        note = _note(f"{scan.food_name} — from your saved barcodes.", "brand")
+        return note, None, None, shown, _open_log(scan.food_id), "none", None
+    if scan.kind == "store":
         note = _note(
             "This is the store's own label (deli, meat or bakery), so no database has it. "
             "Use Read label, or search for the food.",
             "orange",
         )
         return note, None, None, shown, no_update, "none", None
-    result = barcode.lookup(gtin, get_usda(), get_off())
+    result = scan.result
     problems = [dmc.Text(p, size="xs", c="dimmed") for p in result.problems]
-    target = {"gtin": gtin, "hint": result.name_hint}
+    target = {"gtin": scan.gtin, "hint": result.name_hint}
     if result.match is None:
         found_name = f" ({result.name_hint})" if result.name_hint else ""
         note = _note(

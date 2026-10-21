@@ -1,11 +1,12 @@
 /*
- * Barcode scanning and label photos for the Add food page's Scan tab.
+ * Barcode scanning and label photos (Add food's Scan tab, the recipe builder).
  *
  * Scanning uses the browser's built-in BarcodeDetector (Chrome on Android), over a
  * full-screen camera view drawn outside Dash. A code is accepted once it reads the
- * same twice in a row, then written to the `scan-code` store. Label photos are
- * downscaled here (Claude reads at most ~1568 px) and written to `label-photo`.
- * Problems are shown in the `scan-js-msg` text.
+ * same twice in a row, then written to a store: `scan-code` unless the caller names
+ * another with open({code, msg}). Problems go to the `msg` text (`scan-js-msg`).
+ * Label photos are downscaled here (Claude reads at most ~1568 px) and written to
+ * `label-photo`.
  */
 (function () {
   "use strict";
@@ -14,7 +15,10 @@
   const SCAN_INTERVAL_MS = 120;
   const PHOTO_MAX_EDGE = 1568;
 
-  let session = null; // {overlay, stream, track, running}
+  const DEFAULT_TARGET = { code: "scan-code", msg: "scan-js-msg" };
+
+  let session = null; // {overlay, stream, track, running, target}
+  let target = DEFAULT_TARGET;
   let photoInput = null;
 
   function setProps(id, props) {
@@ -24,7 +28,7 @@
   }
 
   function message(text) {
-    setProps("scan-js-msg", { children: text || "" });
+    setProps(target.msg, { children: text || "" });
   }
 
   function cameraError(err) {
@@ -92,7 +96,9 @@
   }
 
   function onKey(e) {
-    if (e.key === "Escape") close();
+    if (e.key !== "Escape") return;
+    e.stopPropagation(); // don't also close a dialog the scanner was opened from
+    close();
   }
 
   function onHide() {
@@ -104,13 +110,14 @@
     session.running = false;
     if (session.stream) session.stream.getTracks().forEach((t) => t.stop());
     session.overlay.remove();
-    document.removeEventListener("keydown", onKey);
+    document.removeEventListener("keydown", onKey, true);
     document.removeEventListener("visibilitychange", onHide);
     session = null;
   }
 
-  async function open() {
+  async function open(where) {
     if (session) return;
+    target = Object.assign({}, DEFAULT_TARGET, where || {});
     message("");
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       message(cameraError(null));
@@ -124,7 +131,7 @@
       return;
     }
     session = { overlay: buildOverlay(), stream: null, track: null, running: true, torch: false };
-    document.addEventListener("keydown", onKey);
+    document.addEventListener("keydown", onKey, true);
     document.addEventListener("visibilitychange", onHide);
     const current = session;
     let stream;
@@ -195,7 +202,7 @@
   function found(code) {
     if (navigator.vibrate) navigator.vibrate(60);
     close();
-    setProps("scan-code", {
+    setProps(target.code, {
       data: { code: code.rawValue, format: code.format, nonce: Date.now() },
     });
   }
@@ -225,6 +232,7 @@
   }
 
   function pickPhoto() {
+    target = DEFAULT_TARGET;
     message("");
     if (!photoInput) {
       photoInput = document.createElement("input");

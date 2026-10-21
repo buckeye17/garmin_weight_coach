@@ -487,3 +487,54 @@ def test_label_job_states(scan):
 
     with pytest.raises(UsdaError):
         usda_client(status=401).find_gtin(CHEERIOS, [CHEERIOS])
+
+
+def test_resolve_kinds(db):
+    usda, off = usda_client([branded(1, "016000275287", "2023")]), off_client(None)
+    with session_scope() as s:
+        assert barcode.resolve(s, "123", None, usda, off).kind == "invalid"
+        assert barcode.resolve(s, "212345678909", None, usda, off).kind == "store"
+        scan = barcode.resolve(s, "016000275287", "upc_a", usda, off)
+        assert scan.kind == "lookup" and scan.gtin == CHEERIOS and scan.result.match
+        food = barcode.save_match(s, scan.result.match, usda)
+        saved = barcode.resolve(s, "0016000275287", "ean_13", usda, off)
+        assert (saved.kind, saved.food_id, saved.food_name) == ("saved", food.id, food.name)
+
+
+@pytest.fixture
+def recipe_page(db, monkeypatch):
+    from gwc.web.app import create_app
+    from gwc.web.pages import foods as page
+
+    create_app()
+    monkeypatch.setattr(page, "get_usda", lambda: usda_client([branded(1, "016000275287", "2023")]))
+    monkeypatch.setattr(page, "get_off", lambda: off_client(None))
+    return page
+
+
+def test_recipe_scan_selects_ingredient(recipe_page, monkeypatch):
+    options, value, text, color = recipe_page.recipe_scan(
+        {"code": "016000275287", "format": "upc_a"}
+    )
+    assert text == "Cheerios Cereal: from USDA." and color == "dimmed"
+    assert {"value": value, "label": "Cheerios Cereal (Cheerios)"} in options
+    with session_scope() as s:
+        assert barcode.saved_food(s, CHEERIOS).id == int(value)
+
+    # Scanning it again finds the saved food without a lookup.
+    monkeypatch.setattr(recipe_page, "get_usda", lambda: usda_client(status=500))
+    _, again, text, _ = recipe_page.recipe_scan({"code": "016000275287", "format": "upc_a"})
+    assert again == value and "saved barcodes" in text
+
+
+def test_recipe_scan_misses(recipe_page, monkeypatch):
+    monkeypatch.setattr(recipe_page, "get_usda", lambda: usda_client())
+    options, value, text, color = recipe_page.recipe_scan({"code": "3017620422003"})
+    assert options is recipe_page.no_update and value is recipe_page.no_update
+    assert "Read label" in text and color == "orange"
+    _, _, text, _ = recipe_page.recipe_scan({"code": "016000275288"})
+    assert "isn't a valid product barcode" in text
+
+    monkeypatch.setattr(recipe_page, "get_off", lambda: off_client(OFF_NUTELLA))
+    _, value, text, _ = recipe_page.recipe_scan({"code": "3017620422003"})
+    assert value and "Open Food Facts (crowd-sourced" in text
