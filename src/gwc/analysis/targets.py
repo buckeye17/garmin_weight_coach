@@ -2,7 +2,8 @@
 
 - Deficit = goal × ρ / 30.44 days; calories = TDEE − deficit.
 - Guardrails: the goal is capped at `max_weekly_loss_pct` of body weight per
-  week, and calories never go below Garmin's resting (BMR) kcal.
+  week, and calories never go below 75 % of Garmin's resting (BMR) kcal, nor
+  below 1,200 kcal.
 - Protein 2.4 g/kg lean mass; fat max(25 % of kcal, 0.5 g/kg); carbs the rest;
   fiber 14 g per 1,000 kcal; sugar ≤ 10 % of kcal; sodium ≤ 2,300 mg.
 
@@ -39,6 +40,10 @@ from gwc.prefs import get_pref, set_pref
 MANUAL_TARGETS_PREF = "targets.manual"
 GOAL_PREF = "goal.loss_kg_per_month"
 TDEE_METHOD_PREF = "targets.tdee_method"
+
+# Calorie floor: a share of resting burn, and an absolute minimum for when it's unknown or low.
+RESTING_FLOOR_SHARE = 0.75
+MIN_KCAL = 1200.0
 
 PROTEIN_G_PER_KG_LEAN = 2.4
 FAT_MIN_KCAL_SHARE = 0.25
@@ -160,13 +165,14 @@ def suggest(
     else:
         flags.append(NO_WEIGHT)
 
+    floor = max(RESTING_FLOOR_SHARE * (resting_kcal or 0.0), MIN_KCAL)
     kcal = deficit = effective = None
     if tdee_kcal is None or rho is None:
         flags.append(NO_TDEE)
     else:
         kcal = _r(tdee_kcal - goal * rho / DAYS_PER_MONTH, 10)
-        if resting_kcal is not None and kcal < resting_kcal:
-            kcal = math.ceil(resting_kcal / 10) * 10
+        if kcal < floor:
+            kcal = math.ceil(floor / 10) * 10
             flags.append(RESTING_FLOOR)
         deficit = tdee_kcal - kcal
         effective = deficit * DAYS_PER_MONTH / rho
@@ -201,7 +207,7 @@ def suggest(
         deficit_kcal=deficit,
         tdee_method=tdee_method,
         tdee_kcal=tdee_kcal,
-        floor_kcal=resting_kcal,
+        floor_kcal=floor,
         flags=flags,
     )
 

@@ -219,7 +219,7 @@ From goal loss per month (in the display unit):
 - Daily deficit = goal × ρ / 30.44 days.
 - Calorie target = base TDEE (without workouts, §7.3) − deficit, plus that food day's workouts (below). Settings picks the TDEE: **Auto** (adaptive once calibrated, else Garmin), Garmin, or Trend-based.
 - **Same-day workouts:** each food day adds a share (default 75 %, set in Settings; 0 turns workout credit off) of the net kcal of the Garmin activities that started in it, live, so a manual sync after a workout raises that day's target. It adds on top of a manual calorie override too. The extra kcal go 25/75 to fat/carbs (all to whichever isn't overridden), with fiber and sugar scaled along. Because the base leaves workouts out, a workout is credited once, on its own day, not again through next week's burn average. Rest days are correspondingly a little lower than the all-in burn. Only recorded activities count; extra walking stays in the base.
-- Guardrails: warn and cap if the goal exceeds ~1 % of body weight per week (configurable); calorie target never below Garmin's resting kcal (hard floor — the app shows the slower rate this allows).
+- Guardrails: warn and cap if the goal exceeds ~1 % of body weight per week (configurable); calorie target never below 75 % of Garmin's resting kcal, nor below 1,200 kcal (hard floor — the app shows the slower rate this allows). A floor at the full resting burn left heavier, mostly sedentary users only their few hundred kcal of daily activity to cut, so it blocked ordinary goals of 0.5–1 % per week.
 - Protein: 2.4 g per kg of lean mass (from the scale; ≈ 1.1 g/lb).
 - Fat: max(25 % of kcal, 0.5 g/kg body weight).
 - Carbs: remaining calories.

@@ -66,7 +66,8 @@ def flag_messages(plan: t.TargetPlan, unit: WeightUnit) -> list[str]:
     flags = plan.flags
     if t.RESTING_FLOOR in flags and plan.floor_kcal is not None:
         out.append(
-            f"Calories are held at your resting burn ({plan.floor_kcal:,.0f} kcal), so the "
+            f"Calories are held at the floor of {plan.floor_kcal:,.0f} kcal (75% of your "
+            f"resting burn, and never under {t.MIN_KCAL:,.0f}), so the "
             f"goal of {fmt_rate(plan.goal_kg_per_month, unit)} is slowed to "
             f"{fmt_rate(plan.effective_kg_per_month, unit)}."
         )

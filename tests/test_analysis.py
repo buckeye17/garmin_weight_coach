@@ -245,10 +245,25 @@ def test_suggest_no_goal_is_maintenance():
 
 
 def test_suggest_resting_floor():
-    plan = targets.suggest(goal_kg_per_month=8, **{**BASE, "resting_kcal": 2905})
-    assert plan.values["kcal"] == 2910  # rounded up, never below resting
+    plan = targets.suggest(goal_kg_per_month=5, **{**BASE, "resting_kcal": 2905})
+    assert plan.values["kcal"] == 2180  # 75 % of 2,905 = 2,178.75, rounded up
+    assert plan.floor_kcal == pytest.approx(2178.75)
     assert targets.RESTING_FLOOR in plan.flags
-    assert plan.effective_kg_per_month == pytest.approx(290 * energy.DAYS_PER_MONTH / 7600)
+    assert plan.effective_kg_per_month == pytest.approx(1020 * energy.DAYS_PER_MONTH / 7600)
+
+
+def test_suggest_below_resting_is_allowed():
+    # 3,200 − 2 kg × 7,600 / 30.44 ≈ 2,700: under resting burn, over the floor.
+    plan = targets.suggest(goal_kg_per_month=2, **{**BASE, "resting_kcal": 2905})
+    assert plan.values["kcal"] == 2700 and targets.RESTING_FLOOR not in plan.flags
+
+
+def test_suggest_minimum_kcal():
+    for resting in (1400, None):
+        plan = targets.suggest(
+            goal_kg_per_month=4, **{**BASE, "tdee_kcal": 2000, "resting_kcal": resting}
+        )
+        assert plan.values["kcal"] == 1200 and targets.RESTING_FLOOR in plan.flags
 
 
 def test_suggest_weekly_cap():
