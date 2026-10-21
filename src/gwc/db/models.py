@@ -214,12 +214,13 @@ class Food(TimestampMixin, NutrientsPer100gMixin, Base):
     fdc_id: Mapped[int | None] = mapped_column(Integer, unique=True)
     name: Mapped[str] = mapped_column(String(255), index=True)
     brand: Mapped[str | None] = mapped_column(String(255))
+    data_type: Mapped[str | None] = mapped_column(String(32))  # USDA dataType
     recipe_yield_g: Mapped[float | None] = mapped_column(Float)
     is_favorite: Mapped[bool] = mapped_column(Boolean, default=False)
     is_archived: Mapped[bool] = mapped_column(Boolean, default=False)
 
     servings: Mapped[list["FoodServing"]] = relationship(
-        back_populates="food", cascade="all, delete-orphan"
+        back_populates="food", cascade="all, delete-orphan", order_by="FoodServing.id"
     )
     recipe_items: Mapped[list["RecipeItem"]] = relationship(
         back_populates="recipe",
@@ -269,6 +270,9 @@ class FoodLog(TimestampMixin, Base):
     food_id: Mapped[int | None] = mapped_column(ForeignKey("food.id", ondelete="SET NULL"))
     description: Mapped[str] = mapped_column(String(255))
     grams: Mapped[float] = mapped_column(Float)
+    # How the amount was entered, e.g. 2 × "1 large" — for display; `grams` is authoritative.
+    amount: Mapped[float | None] = mapped_column(Float)
+    unit_label: Mapped[str | None] = mapped_column(String(128))
     kcal: Mapped[float] = mapped_column(Float, default=0)
     protein_g: Mapped[float] = mapped_column(Float, default=0)
     carbs_g: Mapped[float] = mapped_column(Float, default=0)
@@ -291,16 +295,6 @@ class FoodDayStatus(TimestampMixin, Base):
     food_day: Mapped[date] = mapped_column(Date, primary_key=True)
     is_incomplete: Mapped[bool] = mapped_column(Boolean, default=False)
     note: Mapped[str | None] = mapped_column(Text)
-
-
-class FoodDayBoundary(Base):
-    """Cache of when each food day ends; rebuilt after every sync."""
-
-    __tablename__ = "food_day_boundary"
-
-    food_day: Mapped[date] = mapped_column(Date, primary_key=True)
-    ends_at: Mapped[datetime]
-    from_sleep: Mapped[bool] = mapped_column(Boolean)
 
 
 class DailyTarget(TimestampMixin, Base):

@@ -1,12 +1,16 @@
 import dash
 import dash_mantine_components as dmc
-from dash import Input, Output, State, callback, dcc, no_update
+from dash import ALL, Input, Output, State, callback, dcc, no_update
 from dash_iconify import DashIconify
 
+from gwc.analysis.targets import manual_targets, set_manual_targets
+from gwc.analysis.units import food_unit, set_units, weight_unit
 from gwc.db.models import SyncKind, SyncStatus
 from gwc.garmin.client import LoginState
 from gwc.garmin.service import get_auth, get_runner, get_sync_service
 from gwc.garmin.status import GarminOverview, get_overview
+from gwc.nutrition.nutrients import NUTRIENTS
+from gwc.prefs import get_pref, set_pref
 from gwc.web.format import fmt_day, fmt_duration, fmt_when
 
 FAST_POLL_MS = 2_000
@@ -188,6 +192,93 @@ def _mfa_modal() -> dmc.Modal:
     )
 
 
+def _prefs_card() -> dmc.Card:
+    return dmc.Card(
+        dmc.Stack(
+            [
+                dmc.Group(
+                    [_icon("tabler:adjustments", 22), dmc.Title("Preferences", order=4)], gap="xs"
+                ),
+                dmc.Group(
+                    [
+                        dmc.Text("Body weight", size="sm", c="dimmed"),
+                        dmc.SegmentedControl(id="pref-weight-unit", data=["lb", "kg"], size="xs"),
+                    ],
+                    justify="space-between",
+                ),
+                dmc.Group(
+                    [
+                        dmc.Text("Food amounts", size="sm", c="dimmed"),
+                        dmc.SegmentedControl(id="pref-food-unit", data=["g", "oz"], size="xs"),
+                    ],
+                    justify="space-between",
+                ),
+                dmc.NumberInput(
+                    id="pref-fallback-hour",
+                    label="Food day ends at (if Garmin has no sleep)",
+                    description="Hour of day, 0–23. Normally the day ends when you fall asleep.",
+                    min=0,
+                    max=23,
+                    allowDecimal=False,
+                    w=260,
+                ),
+                dmc.Group(
+                    [
+                        dmc.Text(id="prefs-feedback", size="sm", c="teal"),
+                        dmc.Button("Save preferences", id="prefs-save", size="xs"),
+                    ],
+                    justify="space-between",
+                ),
+            ],
+            gap="sm",
+        ),
+        withBorder=True,
+    )
+
+
+def _targets_card() -> dmc.Card:
+    inputs = [
+        dmc.NumberInput(
+            id={"type": "target-input", "key": n.key},
+            label=f"{n.label} ({n.unit})",
+            description={"target": "target", "minimum": "at least", "limit": "at most"}[
+                n.kind.value
+            ],
+            min=0,
+            hideControls=True,
+            allowDecimal=False,
+            inputProps={"inputMode": "numeric"},
+        )
+        for n in NUTRIENTS
+    ]
+    return dmc.Card(
+        dmc.Stack(
+            [
+                dmc.Group(
+                    [_icon("tabler:target-arrow", 22), dmc.Title("Daily targets", order=4)],
+                    gap="xs",
+                ),
+                dmc.Text(
+                    "Leave blank for no target. Milestone 4 suggests these from your monthly "
+                    "goal; anything entered here overrides the suggestion.",
+                    size="xs",
+                    c="dimmed",
+                ),
+                dmc.SimpleGrid(inputs, cols=2, spacing="xs"),
+                dmc.Group(
+                    [
+                        dmc.Text(id="targets-feedback", size="sm", c="teal"),
+                        dmc.Button("Save targets", id="targets-save", size="xs"),
+                    ],
+                    justify="space-between",
+                ),
+            ],
+            gap="sm",
+        ),
+        withBorder=True,
+    )
+
+
 def layout(**_kwargs):
     return dmc.Stack(
         [
@@ -197,16 +288,22 @@ def layout(**_kwargs):
                 cols={"base": 1, "md": 2},
                 spacing="md",
             ),
+            dmc.SimpleGrid(
+                [_prefs_card(), _targets_card()],
+                cols={"base": 1, "md": 2},
+                spacing="md",
+            ),
             _runs_card(),
             dmc.Card(
                 dmc.Text(
-                    "Units, monthly goal, target overrides, food-day fallback hour and the "
-                    "LLM backend arrive with milestones 3–5.",
+                    "The monthly goal, suggested targets and the LLM backend arrive with "
+                    "milestones 4–5.",
                     size="sm",
                     c="dimmed",
                 ),
                 withBorder=True,
             ),
+            dcc.Store(id="prefs-load", data=0),
             _mfa_modal(),
             dcc.Store(id="settings-refresh", data=0),
             dcc.Interval(id="settings-poll", interval=SLOW_POLL_MS),
@@ -442,6 +539,49 @@ def disconnect(_clicks, signal):
 def sync_now(_clicks, signal):
     result = get_runner().start(SyncKind.MANUAL)
     return *_feedback(result.message, "blue" if result.started else "orange"), signal + 1
+
+
+@callback(
+    Output("pref-weight-unit", "value"),
+    Output("pref-food-unit", "value"),
+    Output("pref-fallback-hour", "value"),
+    Output({"type": "target-input", "key": ALL}, "value"),
+    Input("prefs-load", "data"),
+)
+def load_prefs(_):
+    targets = manual_targets()
+    return (
+        weight_unit(),
+        food_unit(),
+        get_pref("food_day_fallback_hour"),
+        [targets.get(n.key) for n in NUTRIENTS],
+    )
+
+
+@callback(
+    Output("prefs-feedback", "children"),
+    Input("prefs-save", "n_clicks"),
+    State("pref-weight-unit", "value"),
+    State("pref-food-unit", "value"),
+    State("pref-fallback-hour", "value"),
+    prevent_initial_call=True,
+)
+def save_prefs(_clicks, weight, food, hour):
+    set_units(weight or "lb", food or "g")
+    if hour not in (None, ""):
+        set_pref("food_day_fallback_hour", max(0, min(23, int(hour))))
+    return "Saved."
+
+
+@callback(
+    Output("targets-feedback", "children"),
+    Input("targets-save", "n_clicks"),
+    State({"type": "target-input", "key": ALL}, "value"),
+    prevent_initial_call=True,
+)
+def save_targets(_clicks, values):
+    set_manual_targets({n.key: v for n, v in zip(NUTRIENTS, values, strict=True)})
+    return "Saved."
 
 
 dash.register_page(

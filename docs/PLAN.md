@@ -157,7 +157,7 @@ The user eats past midnight and usually sleeps after 04:00, so a food day is not
 - **Food day D ends** at the start time of the main (non-nap) Garmin sleep whose `calendar_date` (wake date) is D+1. That works for both a 04:15 and a 23:00 bedtime.
 - **Fallback:** if there is no main sleep for D+1 (all-nighter, watch not worn, not yet synced), D ends at **09:00 on D+1** (configurable).
 - **Live "today":** until last night's sleep is synced, the current food day uses the fallback rule (before 09:00 → still yesterday).
-- Entries store raw UTC timestamps and the time zone. Food day is **computed, not stored**, so entries near a boundary move to the correct day once sleep data arrives. A cached boundary table is rebuilt after each sync.
+- Entries store raw UTC timestamps and the time zone. Food day is **computed, not stored**, so entries near a boundary move to the correct day once sleep data arrives. Boundaries are computed on the fly from `sleep` (cheap enough that no cache table is needed). A sleep only counts if it starts between 12:00 on D and 18:00 on D+1.
 - Any single entry can be manually pinned to a specific food day.
 - A food day can be marked **incomplete** (partially logged) so it is excluded from averages.
 - Garmin daily totals are per calendar day and are mapped to the food day of the same date. The few post-midnight hours land in the next calendar day; over 7-day averages this mostly cancels out.
@@ -169,12 +169,12 @@ The user eats past midnight and usually sleeps after 04:00, so a food day is not
 ### 6.1 Foods
 | Source | Details |
 |---|---|
-| USDA FoodData Central (A) | Search Foundation, SR Legacy, Survey (FNDDS) and Branded foods. Needs a free key from api.data.gov (`USDA_API_KEY`). Results are cached locally in `food`. |
+| USDA FoodData Central (A) | Search Foundation, SR Legacy, Survey (FNDDS) and Branded foods. Needs a free key from api.data.gov (`USDA_API_KEY`). Searches use `POST /foods/search` (FDC's front end rejects GET searches filtered to "Survey (FNDDS)"). A food is cached in `food` when picked; SR Legacy/Foundation portions cost one extra detail request. |
 | Custom foods (B) | Nutrients per serving or per 100 g, named servings (e.g. "1 scoop = 31 g"). |
 | Recipes (B) | Ingredients with amounts; total yield in grams or servings; nutrients computed. |
 | Favorites / recents | Quick re-logging. |
 
-All foods are normalized to nutrients per 100 g plus named servings.
+All foods are normalized to nutrients per 100 g plus named servings. The log dialog prefills the amount and unit last logged for that food; otherwise it uses a typical single portion ("1 large", label serving) rather than USDA's first listed portion.
 
 ### 6.2 Log entries (`food_log`)
 `eaten_at` (UTC) + `tz`, `food_id`, `grams`, a **snapshot** of nutrient values at log time (editing a food later doesn't change history), optional `food_day_override`, `source` (search / custom / recipe / ai), and a note.
@@ -223,6 +223,7 @@ From goal loss per month (in the display unit):
 - Sugar: ≤ 10 % of kcal (total sugar is tracked, so this is a soft guide).
 - Sodium: ≤ 2,300 mg.
 - Every target can be overridden manually. Targets are recalculated after each sync and stay fixed within a food day.
+- Until this lands (milestone 4), targets are entered manually in Settings and stored as the overrides.
 
 ---
 
