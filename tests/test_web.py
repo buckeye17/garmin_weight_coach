@@ -253,7 +253,7 @@ def test_ai_review_callbacks(app, isolated_settings, monkeypatch):
     from datetime import UTC, datetime
 
     from gwc.db.migrate import upgrade
-    from gwc.db.models import FoodLog
+    from gwc.db.models import Food, FoodLog
     from gwc.db.session import session_scope
     from gwc.web.components import ai_log
 
@@ -276,39 +276,86 @@ def test_ai_review_callbacks(app, isolated_settings, monkeypatch):
         "hit": None,
         "error": None,
     }
+    rest = {
+        "chain": "Chipotle",
+        "item": "Chicken Burrito Bowl, no cheese",
+        "source_kind": "official",
+        "source_url": "https://www.chipotle.com/nutrition-calculator",
+        "serving_label": "1 bowl",
+        "serving_grams": 500,
+    }
     data = {
         "items": [
+            {**base, "key": 0, "source": "usda", "name": "Rice", "grams": 300, "per100": per100},
             {
                 **base,
-                "key": 0,
+                "key": 1,
                 "source": "estimate",
                 "name": "Stew",
                 "grams": 300,
                 "per100": per100,
+                "editable": True,
             },
             {
                 **base,
-                "key": 1,
-                "source": "usda",
-                "name": "?",
-                "grams": 10,
+                "key": 2,
+                "source": "estimate",
+                "name": "Mystery Wrap",
+                "grams": 0,
                 "per100": None,
-                "error": "No matching food.",
+                "editable": True,
+                "restaurant": {**rest, "item": "Mystery Wrap", "source_kind": "not_found"},
             },
+            {
+                **base,
+                "key": 3,
+                "source": "restaurant",
+                "name": rest["item"],
+                "grams": 500,
+                "per100": per100,
+                "restaurant": rest,
+            },
+            {**base, "key": 4, "source": "usda", "name": "?", "grams": 10, "error": "Bad id."},
         ],
         "message": "Check the stew portion.",
     }
     review, display = ai_log.render_review(data)
-    assert display == "flex" and len(review) == 3  # message + 2 cards
-    ids = [{"type": "ai-grams", "index": 0}]
-    lines, total, label, disabled = ai_log.update_totals([150], [True], ids, data)
-    assert lines[0].startswith("300 kcal") and total == "300 kcal total"
-    assert label == "Log 1 item" and not disabled
-    assert ai_log.update_totals([150], [False], ids, data)[3] is True
+    assert display == "flex" and len(review) == 6  # message + 5 cards
+    assert "chipotle.com" in str(review[4])  # the source link
+
+    gram_ids = [{"type": "ai-grams", "index": i} for i in (0, 3)]
+    include_ids = [{"type": "ai-include", "index": i} for i in range(5)]
+    nut_ids = [
+        {"type": "ai-nut", "index": i, "key": k}
+        for i in (1, 2)
+        for k in ("kcal", "protein_g", "carbs_g", "fat_g", "fiber_g", "sugar_g", "sodium_mg")
+    ]
+    # Stew keeps Claude's estimate (600 kcal for 300 g); the wrap is typed in.
+    nuts = [600, 30, 60, 15, 3, 6, 300] + [450, 20, 50, 18, 4, 3, 900]
+    included = [True, True, True, True, False]
+    lines, total, label, disabled = ai_log.update_totals(
+        [150, 500], included, nuts, gram_ids, include_ids, nut_ids, data
+    )
+    assert lines[0].startswith("300 kcal") and lines[1].startswith("1,000 kcal")
+    assert total == "2,350 kcal total" and label == "Log 4 items" and not disabled
+    none = [False] * 5
+    assert ai_log.update_totals([150, 500], none, nuts, gram_ids, include_ids, nut_ids, data)[3]
 
     monkeypatch.setattr(ai_log, "ctx", type("Ctx", (), {"triggered_id": "ai-confirm"})())
-    out = ai_log.confirm(1, None, [150], [True], ids, data, 0)
-    assert out[0] is None and out[2].startswith("Logged 1 item") and out[4] == 1
+    out = ai_log.confirm(
+        1, None, [150, 500], included, nuts, gram_ids, include_ids, nut_ids, data, 0
+    )
+    assert out[0] is None and out[4] == 1
+    assert out[2] == (
+        "Logged 4 items from your description. Saved 2 restaurant items to your foods."
+    )
     with session_scope() as s:
-        row = s.query(FoodLog).one()
-        assert row.grams == 150 and row.kcal == 300
+        logged = {r.description: r for r in s.query(FoodLog)}
+        assert logged["Rice"].grams == 150 and logged["Rice"].kcal == 300
+        assert logged["Stew"].kcal == 600  # an unedited estimate: logged, not saved
+        assert logged["Mystery Wrap"].kcal == pytest.approx(450)
+        assert logged[rest["item"]].kcal == pytest.approx(1000)
+        saved = {f.name: f for f in s.query(Food).filter(Food.brand == "Chipotle")}
+        assert set(saved) == {rest["item"], "Mystery Wrap"}
+        assert saved[rest["item"]].source_url == rest["source_url"]
+        assert saved["Mystery Wrap"].source_url is None

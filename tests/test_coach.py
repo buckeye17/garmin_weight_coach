@@ -1,6 +1,7 @@
 import json
 import time
 from datetime import UTC, date, datetime, timedelta
+from types import SimpleNamespace as NS
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -192,6 +193,54 @@ def test_subscription_options(isolated_settings):
     assert opts.env["ANTHROPIC_API_KEY"] == "" and opts.env["ENABLE_TOOL_SEARCH"] == "false"
     assert opts.output_format == {"type": "json_schema", "schema": {"type": "object"}}
     assert opts.include_partial_messages
+
+
+def test_web_tools_per_backend(isolated_settings):
+    opts = SubscriptionBackend().options(_req(web=True), tool_server=object())
+    assert opts.tools == ["WebSearch", "WebFetch"]
+    assert opts.allowed_tools == ["mcp__gwc__get_x", "WebSearch", "WebFetch"]
+
+    backend = ApiBackend("key")
+    names = [t["name"] for t in backend.request_kwargs(_req(web=True), [])["tools"]]
+    assert names == ["get_x", "web_research"]
+    assert [t["name"] for t in backend.request_kwargs(_req(), [])["tools"]] == ["get_x"]
+    assert [t["type"] for t in backend.web_tools("claude-opus-5-5")] == [
+        "web_search_20260209",
+        "web_fetch_20260209",
+    ]
+    assert [t["type"] for t in backend.web_tools("claude-haiku-5-5")] == ["web_search_20250305"]
+
+
+class FakeMessages:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    def create(self, **kw):
+        self.calls.append({**kw, "messages": list(kw["messages"])})
+        return self.responses.pop(0)
+
+
+def test_api_research_resumes_paused_turns():
+    paused = NS(stop_reason="pause_turn", content=[NS(type="server_tool_use")])
+    url = "https://www.chipotle.com/nutrition-calculator"
+    done = NS(
+        stop_reason="end_turn",
+        content=[
+            NS(type="web_search_tool_result"),
+            NS(type="text", text="Chicken bowl: 650 kcal", citations=[NS(url=url)]),
+            NS(type="text", text=".", citations=None),
+        ],
+    )
+    messages = FakeMessages([paused, done])
+    out = ApiBackend("key").research(NS(beta=NS(messages=messages)), _req(web=True), "bowl?")
+    assert out == {"findings": "Chicken bowl: 650 kcal.", "sources": [url]}
+    first, second = messages.calls
+    assert first["tools"][0]["type"] == "web_search_20260209"
+    assert "format" not in first["output_config"]  # citations can't mix with a JSON answer
+    # The paused turn goes back unchanged, with no extra user message.
+    assert second["messages"][1] == {"role": "assistant", "content": paused.content}
+    assert len(second["messages"]) == 2
 
 
 def test_transcript_prompt():
@@ -462,6 +511,107 @@ def test_parse_and_confirm(db, usda):
         assert rows[1].food.fdc_id == 555 and rows[1].food.servings[0].label == "1 slice"
         assert rows[2].food_id is None and rows[2].kcal == pytest.approx(800)
         assert rows[2].note.startswith("Estimated by Claude")
+
+
+BOWL = {
+    "kcal": 650,
+    "protein_g": 50,
+    "carbs_g": 70,
+    "fat_g": 18,
+    "fiber_g": 12,
+    "sugar_g": 5,
+    "sodium_mg": 1900,
+}
+
+
+def _restaurant(item: str, kind: str = "official", nutrients=BOWL, grams: float = 500):
+    found = kind != "not_found"
+    return {
+        "chain": "Chipotle",
+        "item": item,
+        "source_kind": kind,
+        "source_url": "https://www.chipotle.com/nutrition-calculator" if found else None,
+        "serving_label": "1 bowl",
+        "serving_grams": grams,
+        "nutrients": nutrients if found else None,
+    }
+
+
+def test_parse_restaurant_items(db, usda):
+    def respond(req):
+        assert req.web  # restaurant items are researched on the web
+        assert "Country for restaurant menus: United States" in req.messages[0]["content"]
+        base = {"food_id": None, "fdc_id": None, "eaten_at": None, "amount_label": "1 bowl"}
+        return LLMResult(
+            text="",
+            data={
+                "items": [
+                    {
+                        **base,
+                        "description": "chicken bowl no cheese",
+                        "source": "restaurant",
+                        "grams": 500,
+                        "estimate": None,
+                        "restaurant": _restaurant("Chicken Burrito Bowl, no cheese"),
+                    },
+                    {
+                        **base,
+                        "description": "secret menu quesarito",
+                        "source": "estimate",
+                        "grams": 0,
+                        "estimate": {**BOWL, "kcal": 900},
+                        "restaurant": _restaurant("Quesarito", "not_found", grams=300),
+                    },
+                    {
+                        **base,
+                        "description": "seasonal special",
+                        "source": "estimate",
+                        "grams": 0,
+                        "estimate": None,
+                        "restaurant": _restaurant("Seasonal Special", "not_found", grams=250),
+                    },
+                ],
+                "message": None,
+            },
+        )
+
+    use_backend(respond)
+    found, guessed, blank = parse.parse_description("chipotle", NY, NOW)["items"]
+    assert found["source"] == "restaurant" and not found["editable"]
+    assert found["name"] == "Chicken Burrito Bowl, no cheese"
+    assert parse.item_nutrients(found)["kcal"] == pytest.approx(650)
+    assert parse.item_nutrients(found, 250)["kcal"] == pytest.approx(325)
+    # Not found: editable, weighed at the serving, prefilled with Claude's guess if any.
+    assert guessed["editable"] and guessed["grams"] == 300
+    assert parse.item_nutrients(guessed)["kcal"] == pytest.approx(900)
+    assert blank["editable"] and blank["per100"] is None and blank["grams"] == 250
+
+    with session_scope() as s:
+        parse.confirm_items(s, [found], NY)
+    with session_scope() as s:  # ordered again: the saved food is refreshed, not duplicated
+        parse.confirm_items(s, [{**found, "grams": 250}], NY)
+    typed = {**BOWL, "kcal": 450}
+    with session_scope() as s:
+        parse.confirm_items(
+            s,
+            [
+                {**blank, "totals": typed, "edited": True},
+                {**guessed, "totals": parse.item_nutrients(guessed), "edited": False},
+            ],
+            NY,
+        )
+    with session_scope() as s:
+        saved = {f.name: f for f in s.query(Food).filter(Food.brand == "Chipotle")}
+        assert set(saved) == {"Chicken Burrito Bowl, no cheese", "Seasonal Special"}
+        bowl = saved["Chicken Burrito Bowl, no cheese"]
+        assert bowl.source_url == "https://www.chipotle.com/nutrition-calculator"
+        assert [(sv.label, sv.grams) for sv in bowl.servings] == [("1 bowl", 500)]
+        assert saved["Seasonal Special"].kcal == pytest.approx(450 * 100 / 250)
+        kcal = [r.kcal for r in s.query(FoodLog).order_by(FoodLog.id)]
+        assert kcal == pytest.approx([650, 325, 450, 900])
+    # Next time Claude finds the bowl among the user's foods, with its source.
+    (hit,) = FoodLookup().search_my_foods({"query": "chipotle bowl"})["foods"]
+    assert hit["brand"] == "Chipotle" and hit["source_url"].endswith("nutrition-calculator")
 
 
 def test_parse_handles_empty_result(db, usda):

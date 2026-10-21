@@ -1,6 +1,12 @@
-"""'Describe' tab on Add food: Claude itemizes a meal, the user reviews, then it's logged."""
+"""'Describe' tab on Add food: Claude itemizes a meal, the user reviews, then it's logged.
+
+Rows matched to a record (the user's foods, USDA, a chain's published nutrition)
+scale with the grams input. Rows without one (Claude's estimates, restaurant items
+it couldn't find) show their nutrients as inputs for the amount eaten instead.
+"""
 
 from datetime import datetime
+from urllib.parse import urlparse
 
 import dash_mantine_components as dmc
 from dash import ALL, Input, Output, State, callback, ctx, dcc, no_update
@@ -8,12 +14,20 @@ from dash.exceptions import PreventUpdate
 
 from gwc.analysis.food_day import current_food_day
 from gwc.coach.jobs import get_jobs
-from gwc.coach.parse import confirm_items, item_nutrients, parse_description
+from gwc.coach.parse import confirm_items, item_nutrients, parse_description, saves_food
 from gwc.db.session import session_scope
+from gwc.nutrition.nutrients import BY_KEY, NUTRIENT_KEYS
 from gwc.web.components.common import fmt_clock, icon, now, tz
 
 POLL_MS = 1000
-SOURCE_LABELS = {"my_food": "My food", "usda": "USDA", "estimate": "Estimate"}
+SOURCE_LABELS = {
+    "my_food": "My food",
+    "usda": "USDA",
+    "restaurant": "Restaurant",
+    "estimate": "Estimate",
+}
+SOURCE_COLORS = {"my_food": "teal", "usda": "blue", "restaurant": "violet", "estimate": "orange"}
+SHORT_LABELS = {"kcal": "Calories", "sodium_mg": "Sodium (mg)"}
 
 
 def ai_panel() -> dmc.Stack:
@@ -22,7 +36,7 @@ def ai_panel() -> dmc.Stack:
             dmc.Textarea(
                 id="ai-text",
                 placeholder="e.g. 2 scrambled eggs in butter and a slice of sourdough at 1:30am, "
-                "plus a large black coffee",
+                "plus a large black coffee — or a Chipotle chicken burrito bowl, no cheese",
                 autosize=True,
                 minRows=3,
                 maxRows=8,
@@ -30,8 +44,9 @@ def ai_panel() -> dmc.Stack:
             dmc.Group(
                 [
                     dmc.Text(
-                        "Claude matches each item to your foods or USDA. Nothing is saved until "
-                        "you confirm.",
+                        "Claude matches each item to your foods or USDA, and looks up chain "
+                        "restaurant items on the chain's site. Nothing is saved until you "
+                        "confirm.",
                         size="xs",
                         c="dimmed",
                         flex=1,
@@ -73,54 +88,122 @@ def ai_panel() -> dmc.Stack:
     )
 
 
+def prefill(row: dict) -> dict[str, float | None]:
+    """An editable row's starting values: Claude's estimate for the amount eaten, if any."""
+    if not row.get("per100"):
+        return dict.fromkeys(NUTRIENT_KEYS)
+    totals = item_nutrients(row)
+    return {k: round(totals[k], BY_KEY[k].decimals) for k in NUTRIENT_KEYS}
+
+
+def _source_line(row: dict) -> dmc.Text | dmc.Group | None:
+    rest = row.get("restaurant") or {}
+    if row.get("source") == "restaurant" and rest.get("source_url"):
+        host = urlparse(rest["source_url"]).netloc.removeprefix("www.") or "source"
+        official = rest.get("source_kind") == "official"
+        return dmc.Group(
+            [
+                dmc.Text(
+                    "Official nutrition:" if official else "Third-party nutrition:",
+                    size="xs",
+                    c="violet" if official else "orange",
+                ),
+                dmc.Anchor(host, href=rest["source_url"], target="_blank", size="xs"),
+            ],
+            gap=4,
+        )
+    if not row.get("editable"):
+        return None
+    if rest:
+        text = f"Couldn't find published numbers from {rest['chain']}. "
+        text += (
+            "Check Claude's estimate below against the menu or receipt."
+            if row.get("per100")
+            else "Enter them from the menu or receipt."
+        )
+    elif row.get("per100"):
+        text = "Claude's estimate (no matching food record). Correct anything that's off."
+    else:
+        text = "No matching food. Enter its nutrients, or leave it out."
+    return dmc.Text(text, size="xs", c="orange")
+
+
+def _nutrient_inputs(row: dict) -> dmc.SimpleGrid:
+    values = prefill(row)
+    return dmc.SimpleGrid(
+        [
+            dmc.NumberInput(
+                id={"type": "ai-nut", "index": row["key"], "key": k},
+                label=SHORT_LABELS.get(k, f"{BY_KEY[k].label} (g)"),
+                value=values[k],
+                min=0,
+                size="xs",
+                hideControls=True,
+                inputProps={"inputMode": "decimal"},
+            )
+            for k in NUTRIENT_KEYS
+        ],
+        cols={"base": 2, "sm": 4},
+        spacing="xs",
+        verticalSpacing=4,
+    )
+
+
 def _item_card(row: dict, food_day) -> dmc.Paper:
     source = row.get("source")
-    badge_color = {"my_food": "teal", "usda": "blue", "estimate": "orange"}.get(source, "red")
-    when = datetime.fromisoformat(row["eaten_at"])
+    error = row.get("error")
+    not_found = row.get("editable") and not row.get("per100")
     header = [
         dmc.Text(row["name"], size="sm", fw=600, lineClamp=2, flex=1),
         dmc.Badge(
-            SOURCE_LABELS.get(source, "No match") if not row.get("error") else "No match",
-            color=badge_color if not row.get("error") else "red",
+            "No match" if error else "Not found" if not_found else SOURCE_LABELS.get(source, "?"),
+            color="red" if error else SOURCE_COLORS.get(source, "red"),
             variant="light",
             size="sm",
         ),
     ]
+    when = datetime.fromisoformat(row["eaten_at"])
     detail = f"“{row['description']}” · {row['amount_label']} · {fmt_clock(when, food_day)}"
-    if row.get("error"):
-        body = dmc.Text(f"{row['error']} Add it from the search tabs instead.", size="xs", c="red")
-        controls = None
-    else:
-        body = dmc.Text(id={"type": "ai-kcal", "index": row["key"]}, size="xs", c="dimmed")
-        controls = dmc.Group(
-            [
-                dmc.NumberInput(
-                    id={"type": "ai-grams", "index": row["key"]},
-                    value=row["grams"],
-                    min=0,
-                    step=5,
-                    suffix=" g",
-                    w=120,
-                    size="xs",
-                    inputProps={"inputMode": "decimal"},
-                ),
-                dmc.Checkbox(
-                    id={"type": "ai-include", "index": row["key"]},
-                    label="Include",
-                    checked=True,
-                    size="xs",
-                ),
-            ],
-            justify="space-between",
-        )
+    include = dmc.Checkbox(
+        id={"type": "ai-include", "index": row["key"]},
+        label="Include",
+        checked=not error and not not_found,
+        disabled=bool(error),
+        size="xs",
+    )
     children = [dmc.Group(header, wrap="nowrap", gap="xs"), dmc.Text(detail, size="xs", c="dimmed")]
-    if source == "estimate" and not row.get("error"):
+    if error:
         children.append(
-            dmc.Text("Claude's estimate — no matching food record.", size="xs", c="orange")
+            dmc.Text(f"{error} Add it from the search tabs instead.", size="xs", c="red")
         )
-    children.append(body)
-    if controls is not None:
-        children.append(controls)
+        children.append(dmc.Box(include, display="none"))
+    elif row.get("editable"):
+        children += [_source_line(row), _nutrient_inputs(row), include]
+    else:
+        line = _source_line(row)
+        if line is not None:
+            children.append(line)
+        children.append(
+            dmc.Text(id={"type": "ai-kcal", "index": row["key"]}, size="xs", c="dimmed")
+        )
+        children.append(
+            dmc.Group(
+                [
+                    dmc.NumberInput(
+                        id={"type": "ai-grams", "index": row["key"]},
+                        value=row["grams"],
+                        min=0,
+                        step=5,
+                        suffix=" g",
+                        w=120,
+                        size="xs",
+                        inputProps={"inputMode": "decimal"},
+                    ),
+                    include,
+                ],
+                justify="space-between",
+            )
+        )
     return dmc.Paper(dmc.Stack(children, gap=4), p="xs", withBorder=True)
 
 
@@ -196,6 +279,44 @@ def render_review(data):
     return children, "flex"
 
 
+def _by_index(values, ids) -> dict:
+    return {i["index"]: v for v, i in zip(values or [], ids or [], strict=False)}
+
+
+def _entered(nuts, nut_ids) -> dict[int, dict[str, float | None]]:
+    out: dict[int, dict[str, float | None]] = {}
+    for v, i in zip(nuts or [], nut_ids or [], strict=False):
+        out.setdefault(i["index"], {})[i["key"]] = None if v in (None, "") else float(v)
+    return out
+
+
+def _chosen(data, grams, gram_ids, included, include_ids, nuts, nut_ids) -> list[dict]:
+    """The included rows with the amounts and nutrients entered in the review."""
+    by_grams = _by_index(grams, gram_ids)
+    by_include = _by_index(included, include_ids)
+    entered = _entered(nuts, nut_ids)
+    out = []
+    for row in (data or {}).get("items", []):
+        key = row["key"]
+        if not by_include.get(key) or row.get("error"):
+            continue
+        if row.get("editable"):
+            values = entered.get(key, {})
+            if not values.get("kcal"):
+                continue
+            totals = {k: values.get(k) or 0.0 for k in NUTRIENT_KEYS}
+            start = prefill(row)
+            edited = any(values.get(k) != start[k] for k in NUTRIENT_KEYS)
+            # Claude's weight for it, if any, is only kept for the record.
+            grams = row.get("grams") or 100.0
+            out.append({**row, "grams": grams, "totals": totals, "edited": edited})
+        else:
+            g = float(by_grams.get(key) or 0)
+            if g > 0:
+                out.append({**row, "grams": g, "totals": item_nutrients(row, g)})
+    return out
+
+
 @callback(
     Output({"type": "ai-kcal", "index": ALL}, "children"),
     Output("ai-total", "children"),
@@ -203,13 +324,16 @@ def render_review(data):
     Output("ai-confirm", "disabled"),
     Input({"type": "ai-grams", "index": ALL}, "value"),
     Input({"type": "ai-include", "index": ALL}, "checked"),
+    Input({"type": "ai-nut", "index": ALL, "key": ALL}, "value"),
     State({"type": "ai-grams", "index": ALL}, "id"),
+    State({"type": "ai-include", "index": ALL}, "id"),
+    State({"type": "ai-nut", "index": ALL, "key": ALL}, "id"),
     State("ai-items", "data"),
 )
-def update_totals(grams, included, ids, data):
+def update_totals(grams, included, nuts, gram_ids, include_ids, nut_ids, data):
     rows = {r["key"]: r for r in (data or {}).get("items", [])}
-    lines, total, count = [], 0.0, 0
-    for g, inc, gid in zip(grams, included, ids, strict=False):
+    lines = []
+    for g, gid in zip(grams, gram_ids, strict=False):
         row = rows.get(gid["index"])
         if row is None:
             lines.append("")
@@ -219,9 +343,9 @@ def update_totals(grams, included, ids, data):
             f"{n['kcal']:,.0f} kcal · P {n['protein_g']:,.0f} · C {n['carbs_g']:,.0f} · "
             f"F {n['fat_g']:,.0f}"
         )
-        if inc and (g or 0) > 0:
-            total += n["kcal"]
-            count += 1
+    chosen = _chosen(data, grams, gram_ids, included, include_ids, nuts, nut_ids)
+    total = sum(r["totals"]["kcal"] for r in chosen)
+    count = len(chosen)
     label = f"Log {count} item{'s' * (count != 1)}"
     return lines, f"{total:,.0f} kcal total", label, count == 0
 
@@ -237,22 +361,20 @@ def update_totals(grams, included, ids, data):
     Input("ai-discard", "n_clicks"),
     State({"type": "ai-grams", "index": ALL}, "value"),
     State({"type": "ai-include", "index": ALL}, "checked"),
+    State({"type": "ai-nut", "index": ALL, "key": ALL}, "value"),
     State({"type": "ai-grams", "index": ALL}, "id"),
+    State({"type": "ai-include", "index": ALL}, "id"),
+    State({"type": "ai-nut", "index": ALL, "key": ALL}, "id"),
     State("ai-items", "data"),
     State("logm-done", "data"),
     prevent_initial_call=True,
 )
-def confirm(_ok, _discard, grams, included, ids, data, done):
+def confirm(_ok, _discard, grams, included, nuts, gram_ids, include_ids, nut_ids, data, done):
     if not data:
         raise PreventUpdate
     if ctx.triggered_id == "ai-discard":
         return None, no_update, no_update, no_update, no_update, None
-    rows = {r["key"]: r for r in data.get("items", [])}
-    chosen = []
-    for g, inc, gid in zip(grams, included, ids, strict=False):
-        row = rows.get(gid["index"])
-        if row is not None and inc:
-            chosen.append({**row, "grams": float(g or 0)})
+    chosen = _chosen(data, grams, gram_ids, included, include_ids, nuts, nut_ids)
     try:
         with session_scope() as s:
             count = confirm_items(s, chosen, tz())
@@ -265,5 +387,8 @@ def confirm(_ok, _discard, grams, included, ids, data, done):
             no_update,
             dmc.Alert(f"Couldn't log: {e}", color="red", variant="light"),
         )
+    saved = sum(1 for r in chosen if saves_food(r))
     message = f"Logged {count} item{'s' * (count != 1)} from your description."
+    if saved:
+        message += f" Saved {saved} restaurant item{'s' * (saved != 1)} to your foods."
     return None, "", message, "block", (done or 0) + 1, None

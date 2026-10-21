@@ -216,6 +216,8 @@ class Food(TimestampMixin, NutrientsPer100gMixin, Base):
     brand: Mapped[str | None] = mapped_column(String(255))
     data_type: Mapped[str | None] = mapped_column(String(32))  # USDA dataType
     recipe_yield_g: Mapped[float | None] = mapped_column(Float)
+    # Where the nutrition came from, e.g. a restaurant's nutrition page.
+    source_url: Mapped[str | None] = mapped_column(String(1024))
     is_favorite: Mapped[bool] = mapped_column(Boolean, default=False)
     is_archived: Mapped[bool] = mapped_column(Boolean, default=False)
 

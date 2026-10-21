@@ -347,6 +347,7 @@ class FoodLookup:
                         "name": f.name,
                         "brand": f.brand,
                         "kind": f.source.value,
+                        "source_url": f.source_url,
                         "favorite": f.is_favorite,
                         "per_100g": {k: _r(getattr(f, k)) for k in NUTRIENT_KEYS},
                         "servings": [{"label": sv.label, "grams": sv.grams} for sv in f.servings],
@@ -386,17 +387,18 @@ class FoodLookup:
         return [
             ToolSpec(
                 "search_my_foods",
-                "Search the user's saved foods, recipes and previously used USDA foods. Check "
-                "this first: these are what the user actually eats. Returns nutrients per "
-                "100 g and named servings with grams.",
+                "Search the user's saved foods, recipes, previously used USDA foods and "
+                "restaurant items saved from earlier lookups (brand = the chain). Check this "
+                "first: these are what the user actually eats. Returns nutrients per 100 g "
+                "and named servings with grams.",
                 query_schema,
                 self.search_my_foods,
                 lambda a: f"Checking your foods for “{a.get('query', '')}”…",
             ),
             ToolSpec(
                 "search_usda",
-                "Search USDA FoodData Central. Set branded=true for packaged or restaurant "
-                "products. Returns nutrients per 100 g and portion sizes in grams when known.",
+                "Search USDA FoodData Central. Set branded=true for packaged products. Returns "
+                "nutrients per 100 g and portion sizes in grams when known.",
                 {
                     "type": "object",
                     "properties": {

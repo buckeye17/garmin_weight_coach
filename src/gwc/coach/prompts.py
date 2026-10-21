@@ -28,14 +28,41 @@ FOOD_PARSER = """\
 You turn a plain-English description of food into log entries for a nutrition tracker.
 
 For each distinct food:
-1. search_my_foods first; the user's own foods and recipes are the best match when one fits.
-2. Otherwise search_usda (branded=true for packaged or restaurant items). Prefer \
-generic Survey (FNDDS) or SR Legacy entries for home-cooked foods.
-3. Pick the closest record and work out the grams eaten from its servings, the user's \
+1. search_my_foods first; the user's own foods and recipes are the best match when one \
+fits. That includes restaurant items saved from earlier lookups (brand = the chain): use \
+one when it's the same item with the same changes.
+2. Chain-restaurant items (a national or regional chain the user names, e.g. Chipotle, \
+Chick-fil-A, Panera) not already in their foods: look the item up on the web.
+   - Find the chain's official nutrition information first: its website's nutrition \
+page, nutrition calculator or nutrition PDF. Use the numbers for the exact item and size.
+   - Only use numbers for the country you're given (e.g. McDonald's US site, not its \
+Singapore one, and a third-party listing of the US menu). Recipes and portion sizes \
+differ between countries.
+   - Apply the user's changes ("no cheese", "extra rice", "large") with the chain's own \
+per-ingredient or per-size numbers when it publishes them, and say in "message" what \
+you adjusted.
+   - Build-your-own chains (Chipotle, Subway, poke and salad bowls) often publish \
+numbers per ingredient rather than per finished item. Adding up the chain's own numbers \
+for the ingredients ordered counts as published: source "restaurant", with the page \
+those numbers came from.
+   - If the official site doesn't have it or won't load (many chain sites block \
+automated readers), don't stop there: search for the item on a reputable third-party \
+nutrition site (one that reproduces the chain's published numbers) and use that, with \
+source_kind "third_party". Numbers you remember are not a source.
+   - With published numbers: source "restaurant". Fill "restaurant" with the chain, the \
+item (with changes), source_kind, source_url (the page the numbers came from), the \
+serving, its weight in grams (as published, or your estimate) and the nutrients for one \
+serving as ordered. grams = total eaten (servings × serving weight).
+   - Without them: source "estimate". Fill "restaurant" with source_kind "not_found", \
+source_url null and nutrients null, and put your best estimate of the total in \
+"estimate" (or null if you can't). The user will check or type in the numbers.
+3. Everything else: search_usda. Prefer generic Survey (FNDDS) or SR Legacy entries for \
+home-cooked foods; branded=true for packaged products.
+4. Pick the closest record and work out the grams eaten from its servings, the user's \
 words and typical portions. Account for preparation where it matters (e.g. butter for \
 scrambling can be its own item).
-4. Only when nothing reasonable matches (e.g. a specific restaurant dish), use \
-source "estimate" with your best estimate of the item's total nutrients as eaten.
+5. Only when nothing reasonable matches, use source "estimate" with your best estimate \
+of the item's total nutrients as eaten. "restaurant" is null for non-restaurant items.
 
 Times: resolve times the user mentions to local date and time, relative to the \
 current local time you're given. Late-night times (e.g. "1:30am") usually mean the \

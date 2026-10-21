@@ -3,7 +3,7 @@
 Personal web app that syncs Garmin scale/watch data, tracks daily nutrition against suggested targets, projects weight change over the next 4 weeks, and includes a Claude coach. It runs on one Windows PC and is reached from a desktop browser or a phone over Tailscale. See [docs/PLAN.md](docs/PLAN.md) for the full design.
 
 - **Today**: progress bars for calories, protein, carbs, fat, fiber, sugar and sodium for the current food day (which ends when you fall asleep, per Garmin). Workouts raise that day's targets once they sync (see below).
-- **Add food**: USDA search, your own foods and recipes, or describe a meal in plain English and let Claude itemize it for review.
+- **Add food**: USDA search, your own foods and recipes, or describe a meal in plain English and let Claude itemize it for review. Name a chain restaurant ("Chipotle chicken bowl, no cheese") and Claude looks up the chain's published nutrition on the web, links the source, and saves the item to your foods for next time. If it can't find published numbers, you type them in from the menu or receipt.
 - **Trends** and **Projection**: smoothed weight trend, Garmin vs. trend-based burn, and a 4-week projection with an uncertainty band.
 - **Coach**: chat about your data, plus an automatic weekly summary.
 

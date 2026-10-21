@@ -19,6 +19,8 @@ DEFAULTS: dict[str, Any] = {
     "analysis.adaptive_window_days": 21,
     # Share of each day's net Garmin workout kcal added to that day's calorie target.
     "targets.exercise_eat_back_pct": 75,
+    # Which country's menus restaurant lookups use (recipes and portions differ by country).
+    "food.country": "United States",
 }
 
 
