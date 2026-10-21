@@ -14,7 +14,7 @@ from gwc.analysis.units import WeightUnit, fmt_weight, kg_to, weight_unit
 from gwc.db.session import session_scope
 from gwc.web.components import charts
 from gwc.web.components.analysis_text import fmt_kcal, fmt_rate, tdee_line
-from gwc.web.components.common import card, icon, now, tz
+from gwc.web.components.common import card, icon, now, page_header, tz
 from gwc.web.format import fmt_day
 
 HISTORY_DAYS = 28
@@ -24,20 +24,24 @@ def _stat(label: str, value_id: str, sub_id: str) -> dmc.Card:
     return card(
         dmc.Stack(
             [
-                dmc.Text(label, size="xs", c="dimmed", tt="uppercase", fw=600),
-                dmc.Text(id=value_id, size="xl", fw=700),
+                dmc.Text(label, size="xs", c="dimmed", tt="uppercase", fw=600, lts=0.4),
+                dmc.Text(id=value_id, className="gwc-stat-value"),
                 dmc.Text(id=sub_id, size="xs", c="dimmed"),
             ],
-            gap=2,
+            gap=4,
         ),
-        padding="sm",
+        padding="md",
     )
 
 
 def layout(**_kwargs):
     return dmc.Stack(
         [
-            dmc.Group([icon("tabler:chart-line", 28), dmc.Title("Projection", order=2)], gap="sm"),
+            page_header(
+                "Projection",
+                "tabler:chart-line",
+                "Where your weight is heading over the next four weeks.",
+            ),
             dmc.Stack(id="proj-alerts", gap="xs"),
             dmc.SimpleGrid(
                 [
@@ -53,7 +57,7 @@ def layout(**_kwargs):
                 dmc.Stack(
                     [
                         dmc.Title("Next 4 weeks", order=5),
-                        charts.graph("proj-graph"),
+                        charts.graph("proj-graph", height=340),
                         dmc.Text(
                             "Shaded bands: 10th–90th percentile. Lines start at today's trend "
                             "weight; dots are weigh-ins.",

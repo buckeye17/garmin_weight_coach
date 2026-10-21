@@ -16,25 +16,36 @@ def _status(kind: TargetKind, total: float, target: float) -> tuple[str, str]:
     return f"{n_fmt} over", "orange" if total > target * 1.05 else ""
 
 
-def nutrient_bars(totals: dict[str, float], targets: dict[str, float | None]) -> list:
+def nutrient_bars(
+    totals: dict[str, float], targets: dict[str, float | None], skip: tuple[str, ...] = ()
+) -> list:
     rows = []
     for n in NUTRIENTS:
+        if n.key in skip:
+            continue
         total = totals.get(n.key) or 0
         target = targets.get(n.key)
         if target:
             status, override = _status(n.kind, total, target)
             pct = min(100.0, 100 * total / target)
             right = f"{total:,.0f} / {target:,.0f} {n.unit} · {status}"
-            bar = dmc.Progress(value=pct, color=override or n.color, size="md", radius="xl")
+            bar = dmc.Progress(value=pct, color=override or n.color, size=8, radius="xl")
         else:
             right = f"{total:,.0f} {n.unit}"
-            bar = dmc.Progress(value=0, size="md", radius="xl")
+            bar = dmc.Progress(value=0, size=8, radius="xl")
         rows.append(
             dmc.Stack(
                 [
                     dmc.Group(
                         [
-                            dmc.Text(n.label, size="sm", fw=500),
+                            dmc.Group(
+                                [
+                                    dmc.Box(className="gwc-dot", bg=n.color),
+                                    dmc.Text(n.label, size="sm", fw=500),
+                                ],
+                                gap=8,
+                                wrap="nowrap",
+                            ),
                             dmc.Text(right, size="sm", c="dimmed", ta="right"),
                         ],
                         justify="space-between",

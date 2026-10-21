@@ -25,14 +25,14 @@ from gwc.nutrition.nutrients import NUTRIENTS
 from gwc.prefs import get_pref, set_pref
 from gwc.web.components.analysis_text import flag_messages, plan_summary
 from gwc.web.components.coach_settings import coach_card
-from gwc.web.components.common import tz
+from gwc.web.components.common import page_header, tz
 from gwc.web.format import fmt_day, fmt_duration, fmt_when
 
 FAST_POLL_MS = 2_000
 SLOW_POLL_MS = 15_000
 
 STATUS_COLORS = {
-    SyncStatus.SUCCESS: "teal",
+    SyncStatus.SUCCESS: "brand",
     SyncStatus.RUNNING: "blue",
     SyncStatus.FAILED: "red",
     SyncStatus.RATE_LIMITED: "red",
@@ -239,7 +239,7 @@ def _prefs_card() -> dmc.Card:
                 ),
                 dmc.Group(
                     [
-                        dmc.Text(id="prefs-feedback", size="sm", c="teal"),
+                        dmc.Text(id="prefs-feedback", size="sm", c="brand"),
                         dmc.Button("Save preferences", id="prefs-save", size="xs"),
                     ],
                     justify="space-between",
@@ -350,7 +350,7 @@ def _targets_card() -> dmc.Card:
                     suffix="%",
                     inputProps={"inputMode": "numeric"},
                 ),
-                dmc.Alert(id="targets-summary", color="teal", variant="light", p="xs"),
+                dmc.Alert(id="targets-summary", color="brand", variant="light", p="xs"),
                 dmc.Text(
                     "Overrides: leave blank to use the suggestion shown in each box. Changes "
                     "apply to today; earlier days keep the targets they had.",
@@ -367,7 +367,7 @@ def _targets_card() -> dmc.Card:
                 ),
                 dmc.Group(
                     [
-                        dmc.Text(id="targets-feedback", size="sm", c="teal"),
+                        dmc.Text(id="targets-feedback", size="sm", c="brand"),
                         dmc.Button("Save goal and targets", id="targets-save", size="xs"),
                     ],
                     justify="space-between",
@@ -382,7 +382,11 @@ def _targets_card() -> dmc.Card:
 def layout(**_kwargs):
     return dmc.Stack(
         [
-            dmc.Group([_icon("tabler:settings", 28), dmc.Title("Settings", order=2)], gap="sm"),
+            page_header(
+                "Settings",
+                "tabler:settings",
+                "Garmin connection, sync, goals and preferences.",
+            ),
             dmc.SimpleGrid(
                 [_connection_card(), _sync_card()],
                 cols={"base": 1, "md": 2},
@@ -474,7 +478,7 @@ def refresh(_n, _signal):
         return fmt_when(dt, service.tz, now)
 
     if ov.connected:
-        badge = ("Connected", "teal")
+        badge = ("Connected", "brand")
         text = f"Signed in as {ov.display_name}." if ov.display_name else "Signed in."
     elif ov.mfa_pending:
         badge = ("Waiting for code", "blue")
@@ -553,7 +557,7 @@ def connect(_clicks, signal):
     result = get_auth().connect()
     if result.state is LoginState.CONNECTED:
         _start_first_sync()
-        return *_feedback("Connected. Fetching your Garmin data…", "teal"), False, signal + 1
+        return *_feedback("Connected. Fetching your Garmin data…", "brand"), False, signal + 1
     if result.state is LoginState.NEEDS_MFA:
         return *_feedback(None, "blue"), True, signal + 1
     color = "red" if result.state is LoginState.BLOCKED else "orange"
@@ -585,7 +589,7 @@ def submit_mfa(_clicks, _submits, code, signal):
             "",
             False,
             "",
-            *_feedback("Connected. Fetching your Garmin data…", "teal"),
+            *_feedback("Connected. Fetching your Garmin data…", "brand"),
             signal + 1,
         )
     if result.state is LoginState.NEEDS_MFA:

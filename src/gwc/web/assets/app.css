@@ -1,12 +1,170 @@
+/* ---- Design tokens ---------------------------------------------------- */
+:root {
+  --gwc-page-bg: #f4f6f3;
+  --gwc-surface: #ffffff;
+  --gwc-border: #e4e8e3;
+  --gwc-header-bg: rgba(244, 246, 243, 0.82);
+  --gwc-shadow: 0 1px 2px rgba(16, 24, 20, 0.04), 0 1px 3px rgba(16, 24, 20, 0.06);
+  --gwc-shadow-hover: 0 2px 4px rgba(16, 24, 20, 0.05), 0 6px 16px rgba(16, 24, 20, 0.08);
+  --gwc-heading-font: "Plus Jakarta Sans", Inter, system-ui, sans-serif;
+}
+[data-mantine-color-scheme="dark"] {
+  --gwc-page-bg: #141615;
+  --gwc-surface: #1c1f1e;
+  --gwc-border: #2b302e;
+  --gwc-header-bg: rgba(20, 22, 21, 0.82);
+  --gwc-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --gwc-shadow-hover: 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+
+/* ---- Base ------------------------------------------------------------- */
+body {
+  background: var(--gwc-page-bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "cv11", "ss01";
+}
+
 /* Avoid iOS/Android zoom-on-focus and keep tap targets comfortable. */
 input, select, textarea {
   font-size: 16px;
 }
 
+/* Numbers line up in columns and don't jitter as they change. */
+.mantine-Table-td,
+.mantine-Progress-root + *,
+.gwc-stat-value,
+.gwc-stat-value-sm,
+.gwc-ring-value {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- App chrome ------------------------------------------------------- */
+.gwc-header {
+  background: var(--gwc-header-bg);
+  backdrop-filter: saturate(160%) blur(10px);
+  -webkit-backdrop-filter: saturate(160%) blur(10px);
+  border-bottom-color: var(--gwc-border);
+}
+.gwc-brand {
+  font-size: 1.1rem;
+  letter-spacing: -0.01em;
+}
+.gwc-navbar {
+  background: var(--gwc-page-bg);
+  border-right-color: var(--gwc-border);
+  gap: 2px;
+}
+.gwc-navlink {
+  border-radius: var(--mantine-radius-md);
+  font-weight: 500;
+  color: var(--mantine-color-dimmed);
+  transition: background-color 120ms ease, color 120ms ease;
+}
+.gwc-navlink:hover {
+  color: var(--mantine-color-text);
+}
+.gwc-navlink[data-active] {
+  background: var(--gwc-surface);
+  color: var(--mantine-color-brand-text);
+  box-shadow: var(--gwc-shadow);
+  font-weight: 600;
+}
+.gwc-navlink .mantine-NavLink-label {
+  font-weight: inherit;
+}
+.gwc-main {
+  background: var(--gwc-page-bg);
+}
+
+/* Phone bottom bar */
+.gwc-bottom-nav {
+  background: var(--gwc-header-bg);
+  backdrop-filter: saturate(160%) blur(10px);
+  -webkit-backdrop-filter: saturate(160%) blur(10px);
+  border-top: 1px solid var(--gwc-border);
+}
+.gwc-tab-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 28px;
+  border-radius: 999px;
+  transition: background-color 150ms ease;
+}
+.gwc-tab[style*="brand"] .gwc-tab-icon {
+  background: var(--mantine-color-brand-light);
+}
+
+/* ---- Surfaces --------------------------------------------------------- */
+.mantine-Card-root {
+  background: var(--gwc-surface);
+  border-color: var(--gwc-border);
+}
+.mantine-Card-root .mantine-Title-root[data-order="5"] {
+  font-size: 0.95rem;
+  letter-spacing: -0.005em;
+}
+.mantine-Modal-content,
+.mantine-Menu-dropdown,
+.mantine-Popover-dropdown {
+  background: var(--gwc-surface);
+}
+
+/* ---- Typography ------------------------------------------------------- */
+.gwc-page-title {
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+.gwc-stat-value {
+  font-family: var(--gwc-heading-font);
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+.gwc-stat-value-sm {
+  font-family: var(--gwc-heading-font);
+  font-size: 1.1rem;
+  letter-spacing: -0.01em;
+}
+.gwc-ring-value {
+  font-family: var(--gwc-heading-font);
+  font-size: 1.6rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+}
+
+/* ---- Today ------------------------------------------------------------ */
+.gwc-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+.gwc-entry {
+  border-color: var(--gwc-border);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.gwc-entry:hover {
+  border-color: var(--mantine-color-brand-light-hover);
+  box-shadow: var(--gwc-shadow-hover);
+}
+
+/* ---- Tabs ------------------------------------------------------------- */
+.mantine-Tabs-tab {
+  font-weight: 500;
+}
+.mantine-Tabs-tab[data-active] {
+  font-weight: 600;
+}
+
 /* Coach replies rendered from Markdown. */
 .coach-md {
   font-size: var(--mantine-font-size-sm);
-  line-height: 1.5;
+  line-height: 1.55;
   overflow-wrap: anywhere;
 }
 .coach-md p,
@@ -51,5 +209,8 @@ input, select, textarea {
   }
   .mantine-Tabs-tabSection {
     display: none;
+  }
+  .gwc-stat-value {
+    font-size: 1.25rem;
   }
 }

@@ -199,7 +199,7 @@ def save_coach(_clicks, backend, models, customs, efforts, fallback, enabled, da
         summary_enabled=bool(enabled),
         summary_weekday=int(day or 0),
     )
-    return dmc.Text("Saved.", size="sm", c="teal")
+    return dmc.Text("Saved.", size="sm", c="brand")
 
 
 @callback(
@@ -225,7 +225,7 @@ def test_coach(_clicks):
     return dmc.Alert(
         f"{result.model or 'Claude'} replied “{result.text.strip()[:40]}” in {seconds:.1f}s "
         f"via the {backend_name()} backend.",
-        color="teal",
+        color="brand",
         variant="light",
         title="Connected",
     )

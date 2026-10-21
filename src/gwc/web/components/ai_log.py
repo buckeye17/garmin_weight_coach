@@ -26,7 +26,7 @@ SOURCE_LABELS = {
     "restaurant": "Restaurant",
     "estimate": "Estimate",
 }
-SOURCE_COLORS = {"my_food": "teal", "usda": "blue", "restaurant": "violet", "estimate": "orange"}
+SOURCE_COLORS = {"my_food": "brand", "usda": "blue", "restaurant": "violet", "estimate": "orange"}
 SHORT_LABELS = {"kcal": "Calories", "sodium_mg": "Sodium (mg)"}
 
 

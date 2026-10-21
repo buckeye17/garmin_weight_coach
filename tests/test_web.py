@@ -57,7 +57,7 @@ def test_bottom_nav_highlight():
 
     ids = [{"type": "bottom-nav", "href": i.href} for i in NAV_ITEMS if i.mobile_primary]
     colors = _highlight_bottom_nav("/projection", ids)
-    assert colors == ["dimmed", "dimmed", "teal", "dimmed"]
+    assert colors == ["dimmed", "dimmed", "brand", "dimmed"]
 
 
 def test_settings_refresh_without_garmin(app):

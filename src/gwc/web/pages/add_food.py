@@ -11,7 +11,7 @@ from gwc.nutrition import foods
 from gwc.nutrition.service import get_usda
 from gwc.nutrition.usda import UsdaError, UsdaHit
 from gwc.web.components.ai_log import ai_panel
-from gwc.web.components.common import icon, triggered_click
+from gwc.web.components.common import icon, page_header, triggered_click
 from gwc.web.components.log_modal import log_modal
 
 SOURCE_BADGE = {FoodSource.USDA: "USDA", FoodSource.CUSTOM: "Mine", FoodSource.RECIPE: "Recipe"}
@@ -71,10 +71,14 @@ def _food_rows(items: list[Food]) -> list:
 def layout(**_kwargs):
     return dmc.Stack(
         [
-            dmc.Group([icon("tabler:circle-plus", 28), dmc.Title("Add food", order=2)], gap="sm"),
+            page_header(
+                "Add food",
+                "tabler:circle-plus",
+                "Search USDA, reuse your own foods, or describe a meal.",
+            ),
             dmc.Alert(
                 id="logm-result",
-                color="teal",
+                color="brand",
                 variant="light",
                 display="none",
                 withCloseButton=True,

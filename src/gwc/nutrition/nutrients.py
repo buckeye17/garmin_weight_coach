@@ -22,7 +22,7 @@ class Nutrient:
 
 
 NUTRIENTS: list[Nutrient] = [
-    Nutrient("kcal", "Calories", "kcal", TargetKind.TARGET, "teal"),
+    Nutrient("kcal", "Calories", "kcal", TargetKind.TARGET, "brand"),
     Nutrient("protein_g", "Protein", "g", TargetKind.MINIMUM, "blue"),
     Nutrient("carbs_g", "Carbs", "g", TargetKind.TARGET, "yellow"),
     Nutrient("fat_g", "Fat", "g", TargetKind.TARGET, "grape"),

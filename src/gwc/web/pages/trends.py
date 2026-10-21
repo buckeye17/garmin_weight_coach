@@ -13,7 +13,7 @@ from gwc.analysis.units import WeightUnit, kg_to, weight_unit
 from gwc.db.models import Activity, BodyComp, DailySummary, Sleep
 from gwc.db.session import session_scope
 from gwc.web.components import charts
-from gwc.web.components.common import card, icon, now, tz
+from gwc.web.components.common import card, now, page_header, tz
 from gwc.web.format import fmt_day
 
 RANGES = {"30": 30, "90": 90, "365": 365, "all": None}
@@ -30,25 +30,23 @@ def _chart_card(title: str, graph_id: str, note: str | None = None) -> dmc.Card:
 def layout(**_kwargs):
     return dmc.Stack(
         [
-            dmc.Group(
-                [
-                    dmc.Group(
-                        [icon("tabler:chart-dots", 28), dmc.Title("Trends", order=2)], gap="sm"
-                    ),
-                    dmc.SegmentedControl(
-                        id="trends-range",
-                        data=[
-                            {"value": "30", "label": "30d"},
-                            {"value": "90", "label": "90d"},
-                            {"value": "365", "label": "1y"},
-                            {"value": "all", "label": "All"},
-                        ],
-                        value="30",
-                        size="xs",
-                        persistence=True,
-                    ),
-                ],
-                justify="space-between",
+            page_header(
+                "Trends",
+                "tabler:chart-dots",
+                "Weight, intake, sleep and activity over time.",
+                dmc.SegmentedControl(
+                    id="trends-range",
+                    data=[
+                        {"value": "30", "label": "30d"},
+                        {"value": "90", "label": "90d"},
+                        {"value": "365", "label": "1y"},
+                        {"value": "all", "label": "All"},
+                    ],
+                    value="30",
+                    size="xs",
+                    radius="md",
+                    persistence=True,
+                ),
             ),
             dmc.SimpleGrid(
                 [

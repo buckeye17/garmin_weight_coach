@@ -10,7 +10,7 @@ from gwc.nutrition.log import unit_label
 from gwc.nutrition.nutrients import NUTRIENTS
 from gwc.nutrition.service import get_usda
 from gwc.nutrition.usda import UsdaError, UsdaHit
-from gwc.web.components.common import icon, triggered_click, unit_select_data
+from gwc.web.components.common import icon, page_header, triggered_click, unit_select_data
 from gwc.web.components.log_modal import preview_line
 
 BASIS_SERVING, BASIS_100G = "Per serving", "Per 100 g"
@@ -166,31 +166,28 @@ def _recipe_editor() -> dmc.Modal:
 def layout(**_kwargs):
     return dmc.Stack(
         [
-            dmc.Group(
-                [
-                    dmc.Group(
-                        [icon("tabler:tools-kitchen-2", 28), dmc.Title("Foods", order=2)], gap="sm"
-                    ),
-                    dmc.Group(
-                        [
-                            dmc.Button(
-                                "New food",
-                                id="new-food",
-                                leftSection=icon("tabler:plus", 16),
-                                size="xs",
-                            ),
-                            dmc.Button(
-                                "New recipe",
-                                id="new-recipe",
-                                leftSection=icon("tabler:chef-hat", 16),
-                                size="xs",
-                                variant="light",
-                            ),
-                        ],
-                        gap="xs",
-                    ),
-                ],
-                justify="space-between",
+            page_header(
+                "Foods",
+                "tabler:tools-kitchen-2",
+                "Your custom foods, recipes and saved USDA items.",
+                dmc.Group(
+                    [
+                        dmc.Button(
+                            "New food",
+                            id="new-food",
+                            leftSection=icon("tabler:plus", 16),
+                            size="xs",
+                        ),
+                        dmc.Button(
+                            "New recipe",
+                            id="new-recipe",
+                            leftSection=icon("tabler:chef-hat", 16),
+                            size="xs",
+                            variant="light",
+                        ),
+                    ],
+                    gap="xs",
+                ),
             ),
             dmc.TextInput(
                 id="foods-filter",

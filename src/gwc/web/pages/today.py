@@ -81,44 +81,66 @@ def layout(**_kwargs):
         [
             dmc.Group(
                 [
-                    dmc.ActionIcon(
-                        icon("tabler:chevron-left"),
-                        id="day-prev",
-                        variant="subtle",
-                        size="lg",
-                        **{"aria-label": "Previous day"},
-                    ),
                     dmc.Stack(
                         [
-                            dmc.Title(id="day-title", order=3, ta="center"),
-                            dmc.Text(id="day-sub", size="xs", c="dimmed", ta="center"),
+                            dmc.Title(id="day-title", order=2, className="gwc-page-title"),
+                            dmc.Text(id="day-sub", size="sm", c="dimmed"),
                         ],
                         gap=0,
-                        flex=1,
+                        miw=0,
                     ),
-                    dmc.ActionIcon(
-                        icon("tabler:chevron-right"),
-                        id="day-next",
-                        variant="subtle",
-                        size="lg",
-                        **{"aria-label": "Next day"},
+                    dmc.Group(
+                        [
+                            dmc.Paper(
+                                dmc.Group(
+                                    [
+                                        dmc.ActionIcon(
+                                            icon("tabler:chevron-left"),
+                                            id="day-prev",
+                                            variant="subtle",
+                                            color="gray",
+                                            size="lg",
+                                            **{"aria-label": "Previous day"},
+                                        ),
+                                        dmc.Button(
+                                            "Today",
+                                            id="day-today",
+                                            variant="subtle",
+                                            color="gray",
+                                            size="compact-sm",
+                                        ),
+                                        dmc.ActionIcon(
+                                            icon("tabler:chevron-right"),
+                                            id="day-next",
+                                            variant="subtle",
+                                            color="gray",
+                                            size="lg",
+                                            **{"aria-label": "Next day"},
+                                        ),
+                                    ],
+                                    gap=2,
+                                    wrap="nowrap",
+                                ),
+                                p=2,
+                                radius="md",
+                                withBorder=True,
+                            ),
+                            dmc.Anchor(
+                                dmc.Button("Add food", leftSection=icon("tabler:plus", 16)),
+                                href="/add",
+                            ),
+                        ],
+                        gap="xs",
+                        wrap="nowrap",
                     ),
                 ],
-                wrap="nowrap",
-            ),
-            dmc.Group(
-                [
-                    dmc.Button("Today", id="day-today", variant="default", size="xs"),
-                    dmc.Anchor(
-                        dmc.Button("Add food", size="xs", leftSection=icon("tabler:plus", 16)),
-                        href="/add",
-                    ),
-                ],
-                justify="center",
+                justify="space-between",
+                align="center",
+                mb=4,
             ),
             dmc.Alert(
                 id="logm-result",
-                color="teal",
+                color="brand",
                 variant="light",
                 display="none",
                 withCloseButton=True,
@@ -131,11 +153,22 @@ def layout(**_kwargs):
                             [
                                 dmc.Group(
                                     [
-                                        dmc.Title("Totals", order=5),
-                                        dmc.Text(id="day-remaining", size="sm", fw=600),
+                                        dmc.RingProgress(
+                                            id="day-ring",
+                                            size=150,
+                                            thickness=13,
+                                            roundCaps=True,
+                                            sections=[],
+                                            label=dmc.Stack(
+                                                id="day-remaining", gap=0, align="center"
+                                            ),
+                                        ),
+                                        dmc.Stack(id="day-ring-stats", gap="sm", flex=1),
                                     ],
-                                    justify="space-between",
+                                    gap="lg",
+                                    wrap="nowrap",
                                 ),
+                                dmc.Divider(),
                                 dmc.Stack(id="day-bars", gap="sm"),
                                 dmc.Text(id="day-target-note", size="xs", c="dimmed"),
                                 dmc.Alert(
@@ -160,7 +193,7 @@ def layout(**_kwargs):
                                 dmc.Stack(
                                     [
                                         dmc.Title("Quick add", order=5),
-                                        dmc.Group(id="quick-add", gap="xs"),
+                                        dmc.Group(id="quick-add", gap=6),
                                     ],
                                     gap="xs",
                                 ),
@@ -210,17 +243,66 @@ def _entry_row(e: FoodLog, day: date) -> dmc.UnstyledButton:
                         flex=1,
                         miw=0,
                     ),
-                    dmc.Text(f"{e.kcal:,.0f}", size="sm", fw=600),
+                    dmc.Stack(
+                        [
+                            dmc.Text(f"{e.kcal:,.0f}", size="sm", fw=700, ta="right"),
+                            dmc.Text("kcal", size="xs", c="dimmed", ta="right"),
+                        ],
+                        gap=0,
+                    ),
                 ],
                 wrap="nowrap",
                 gap="sm",
             ),
             p="xs",
             withBorder=True,
+            className="gwc-entry",
         ),
         id={"type": "entry-row", "index": e.id},
         w="100%",
     )
+
+
+def _ring_stat(label: str, value: str) -> dmc.Stack:
+    return dmc.Stack(
+        [
+            dmc.Text(label, size="xs", c="dimmed", tt="uppercase", fw=600, lts=0.4),
+            dmc.Text(value, fw=700, className="gwc-stat-value-sm"),
+        ],
+        gap=0,
+    )
+
+
+def _calorie_ring(
+    totals: dict[str, float], targets: dict[str, float | None], n_entries: int
+) -> tuple[list[dict], list, list]:
+    """Ring sections, the label inside the ring, and the stats beside it."""
+    eaten = totals.get("kcal") or 0
+    target = targets.get("kcal")
+    stats = [_ring_stat("Eaten", f"{eaten:,.0f} kcal")]
+    if not target:
+        label = [
+            dmc.Text(f"{eaten:,.0f}", className="gwc-ring-value"),
+            dmc.Text("kcal eaten", size="xs", c="dimmed"),
+        ]
+        return [], label, stats + [_ring_stat("Entries", f"{n_entries}")]
+    left = target - eaten
+    over = left < 0
+    color = "red" if eaten > target * 1.05 else "orange" if over else "brand"
+    value = dmc.Text(f"{abs(left):,.0f}", className="gwc-ring-value")
+    if over:
+        value.c = color
+    label = [
+        value,
+        dmc.Text("kcal over" if over else "kcal left", size="xs", c="dimmed"),
+    ]
+    # A zero-width section still draws a round-cap dot, so leave the ring empty.
+    sections = [{"value": min(100.0, 100 * eaten / target), "color": color}] if eaten else []
+    stats += [
+        _ring_stat("Target", f"{target:,.0f} kcal"),
+        _ring_stat("Entries", f"{n_entries}"),
+    ]
+    return sections, label, stats
 
 
 @callback(
@@ -252,6 +334,8 @@ def change_day(_prev, _next, _today, selected):
     Output("day-entries", "children"),
     Output("quick-add", "children"),
     Output("day-next", "disabled"),
+    Output("day-ring", "sections"),
+    Output("day-ring-stats", "children"),
     Input("day-selected", "data"),
     Input("logm-done", "data"),
     Input("edit-done", "data"),
@@ -276,6 +360,7 @@ def render_day(selected, _done, _edited):
                 id={"type": "quick-food", "index": f.id},
                 variant="light",
                 size="compact-sm",
+                radius="xl",
                 leftSection=icon("tabler:star-filled", 12) if f.is_favorite else None,
             )
             for f in quick
@@ -299,10 +384,7 @@ def render_day(selected, _done, _edited):
             f"(or {end_text} if Garmin has no sleep)"
         )
 
-    remaining = ""
-    if targets.get("kcal"):
-        left = targets["kcal"] - totals["kcal"]
-        remaining = f"{left:,.0f} kcal left" if left >= 0 else f"{-left:,.0f} kcal over"
+    ring, remaining, ring_stats = _calorie_ring(totals, targets, len(entries))
     unit = weight_unit()
     hint = []
     if NO_GOAL in plan.flags and "kcal" not in plan.overridden:
@@ -313,7 +395,7 @@ def render_day(selected, _done, _edited):
     return (
         title,
         sub,
-        nutrient_bars(totals, targets),
+        nutrient_bars(totals, targets, skip=("kcal",)),
         remaining,
         plan_summary(plan, unit),
         "block" if hint else "none",
@@ -322,6 +404,8 @@ def render_day(selected, _done, _edited):
         entry_rows,
         quick_buttons,
         day >= today,
+        ring,
+        ring_stats,
     )
 
 

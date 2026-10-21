@@ -4,8 +4,8 @@
     {
       "name": "gwc",
       "runtimeExecutable": "uv",
-      "runtimeArgs": ["run", "gwc", "serve"],
-      "port": 8060
+      "runtimeArgs": ["run", "gwc", "serve", "--port", "8061"],
+      "port": 8061
     }
   ]
 }

@@ -95,3 +95,27 @@ def triggered_click() -> dict | None:
 
 def card(children, **kwargs) -> dmc.Card:
     return dmc.Card(children, withBorder=True, **kwargs)
+
+
+def page_header(title: str, icon_name: str, subtitle: str | None = None, right=None) -> dmc.Group:
+    """Page title with a tinted icon tile, an optional one-line subtitle and right-side controls."""
+    heading = dmc.Group(
+        [
+            dmc.ThemeIcon(icon(icon_name, 22), size=42, radius="md", variant="light"),
+            dmc.Stack(
+                [dmc.Title(title, order=2, className="gwc-page-title")]
+                + ([dmc.Text(subtitle, size="sm", c="dimmed", lineClamp=2)] if subtitle else []),
+                gap=0,
+                miw=0,
+            ),
+        ],
+        gap="sm",
+        wrap="nowrap",
+        miw=0,
+    )
+    return dmc.Group(
+        [heading] + ([right] if right is not None else []),
+        justify="space-between",
+        align="center",
+        mb=4,
+    )

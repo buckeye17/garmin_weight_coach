@@ -17,10 +17,41 @@ MOBILE_BREAKPOINT = "md"
 MOBILE_BREAKPOINT_PX = 992
 HEADER_POLL_MS = 30_000
 
+# Evergreen brand scale, light to dark. Shade 7 carries white text at AA contrast.
+BRAND = [
+    "#e7f7f0",
+    "#cdeee0",
+    "#9fdcc2",
+    "#6cc9a2",
+    "#43b886",
+    "#28ab74",
+    "#16a068",
+    "#008a59",
+    "#00794d",
+    "#00663f",
+]
+BODY_FONT = "Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
+HEADING_FONT = "'Plus Jakarta Sans', " + BODY_FONT
+
 THEME = {
-    "primaryColor": "teal",
+    "primaryColor": "brand",
+    "primaryShade": {"light": 7, "dark": 6},
+    "colors": {"brand": BRAND},
     "defaultRadius": "md",
-    "fontFamily": "Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
+    "fontFamily": BODY_FONT,
+    "headings": {"fontFamily": HEADING_FONT, "fontWeight": "700"},
+    "components": {
+        "Card": {"defaultProps": {"radius": "lg", "padding": "lg", "shadow": "xs"}},
+        "Button": {"styles": {"root": {"fontWeight": 600}}},
+        "Modal": {
+            "defaultProps": {
+                "radius": "lg",
+                "overlayProps": {"backgroundOpacity": 0.45, "blur": 3},
+            }
+        },
+        "Menu": {"defaultProps": {"radius": "md", "shadow": "md"}},
+        "Tooltip": {"defaultProps": {"radius": "sm"}},
+    },
 }
 
 
@@ -32,9 +63,27 @@ def _header() -> dmc.AppShellHeader:
     return dmc.AppShellHeader(
         dmc.Group(
             [
-                dmc.Group(
-                    [_icon("tabler:scale", 24), dmc.Title("Weight Coach", order=4)],
-                    gap="xs",
+                dmc.Anchor(
+                    dmc.Group(
+                        [
+                            dmc.ThemeIcon(
+                                _icon("tabler:scale", 20),
+                                size=34,
+                                radius="md",
+                                variant="gradient",
+                                gradient={"from": "brand.5", "to": "brand.8", "deg": 135},
+                            ),
+                            # Phones show just the mark so the sync badge keeps its row.
+                            dmc.Title(
+                                "Weight Coach", order=4, className="gwc-brand", visibleFrom="xs"
+                            ),
+                        ],
+                        gap=10,
+                        wrap="nowrap",
+                    ),
+                    href="/",
+                    underline="never",
+                    c="inherit",
                 ),
                 dmc.Anchor(
                     dmc.Badge(
@@ -42,16 +91,22 @@ def _header() -> dmc.AppShellHeader:
                         id="sync-status-badge",
                         variant="light",
                         color="gray",
-                        maw={"base": 200, "sm": 420},
+                        size="lg",
+                        radius="xl",
+                        leftSection=_icon("tabler:refresh", 14),
+                        maw={"base": 280, "sm": 420},
                     ),
                     href="/settings",
                     underline="never",
+                    miw=0,
                 ),
             ],
             h="100%",
             px="md",
             justify="space-between",
-        )
+            wrap="nowrap",
+        ),
+        className="gwc-header",
     )
 
 
@@ -63,21 +118,31 @@ def _navbar() -> dmc.AppShellNavbar:
                 href=item.href,
                 leftSection=_icon(item.icon),
                 active="exact" if item.href == "/" else "partial",
+                className="gwc-navlink",
             )
             for item in NAV_ITEMS
         ],
-        p="xs",
+        p="sm",
+        className="gwc-navbar",
     )
 
 
 def _bottom_nav() -> dmc.Paper:
     def tab(label: str, icon: str, href: str) -> dmc.Anchor:
         return dmc.Anchor(
-            dmc.Stack([_icon(icon, 22), dmc.Text(label, size="xs")], gap=2, align="center"),
+            dmc.Stack(
+                [
+                    dmc.Box(_icon(icon, 22), className="gwc-tab-icon"),
+                    dmc.Text(label, size="xs", fw=500),
+                ],
+                gap=2,
+                align="center",
+            ),
             href=href,
             id={"type": "bottom-nav", "href": href},
             underline="never",
             c="dimmed",
+            className="gwc-tab",
         )
 
     primary = [tab(i.label, i.icon, i.href) for i in NAV_ITEMS if i.mobile_primary]
@@ -86,11 +151,15 @@ def _bottom_nav() -> dmc.Paper:
             dmc.MenuTarget(
                 dmc.UnstyledButton(
                     dmc.Stack(
-                        [_icon("tabler:dots", 22), dmc.Text("More", size="xs")],
+                        [
+                            dmc.Box(_icon("tabler:dots", 22), className="gwc-tab-icon"),
+                            dmc.Text("More", size="xs", fw=500),
+                        ],
                         gap=2,
                         align="center",
                     ),
                     c="dimmed",
+                    className="gwc-tab",
                 )
             ),
             dmc.MenuDropdown(
@@ -106,13 +175,13 @@ def _bottom_nav() -> dmc.Paper:
     return dmc.Paper(
         dmc.Group(primary + [more], justify="space-around", h="100%", px="xs"),
         hiddenFrom=MOBILE_BREAKPOINT,
-        withBorder=True,
         radius=0,
         h=BOTTOM_NAV_HEIGHT,
         pos="fixed",
         bottom=0,
         left=0,
         right=0,
+        className="gwc-bottom-nav",
         style={"zIndex": 200, "paddingBottom": "env(safe-area-inset-bottom)"},
     )
 
@@ -134,7 +203,8 @@ def build_layout() -> dmc.MantineProvider:
                         ),
                         # Keeps page content clear of the fixed bottom bar on phones.
                         dmc.Box(h=BOTTOM_NAV_HEIGHT + 16, hiddenFrom=MOBILE_BREAKPOINT),
-                    ]
+                    ],
+                    className="gwc-main",
                 ),
                 _bottom_nav(),
             ],
@@ -164,7 +234,7 @@ clientside_callback(
     dash.State({"type": "bottom-nav", "href": ALL}, "id"),
 )
 def _highlight_bottom_nav(pathname: str | None, ids: list[dict]) -> list[str]:
-    return ["teal" if is_active(i["href"], pathname) else "dimmed" for i in ids]
+    return ["brand" if is_active(i["href"], pathname) else "dimmed" for i in ids]
 
 
 @callback(

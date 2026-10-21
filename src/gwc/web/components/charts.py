@@ -77,9 +77,12 @@ def empty(scheme: str | None, message: str, height: int = 200) -> go.Figure:
     return fig
 
 
-def graph(graph_id: str) -> dcc.Graph:
+def graph(graph_id: str, height: int = 300) -> dcc.Graph:
+    # A responsive graph sizes itself to its div, which otherwise has no height of its own
+    # inside a card and can collapse to zero, leaving the plot spilling over the text below.
     return dcc.Graph(
         id=graph_id,
         config={"displayModeBar": False, "responsive": True},
-        figure=go.Figure(layout={"paper_bgcolor": "rgba(0,0,0,0)", "height": 300}),
+        figure=go.Figure(layout={"paper_bgcolor": "rgba(0,0,0,0)", "height": height}),
+        style={"height": height},
     )

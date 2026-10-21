@@ -75,11 +75,11 @@ def badge(ov: GarminOverview, fmt) -> tuple[str, str]:
     if ov.last_run is not None and ov.last_run.status is SyncStatus.AUTH_REQUIRED:
         return "Reconnect Garmin", "orange"
     if ov.last_success is None:
-        return "Garmin connected", "teal"
+        return "Garmin connected", "brand"
     text = f"Synced {fmt(ov.last_success.started_at)}"
     if ov.last_run is not None and ov.last_run.status is not SyncStatus.SUCCESS:
         return f"{text} · last sync failed", "orange"
     if ov.provisional_days:
         n = len(ov.provisional_days)
         return f"{text} · {n} provisional day{'s' if n > 1 else ''}", "yellow"
-    return text, "teal"
+    return text, "brand"

@@ -6,7 +6,7 @@ from dash.exceptions import PreventUpdate
 from gwc.coach import chat, summary
 from gwc.coach.jobs import get_jobs
 from gwc.coach.settings import WEEKDAYS, summary_enabled, summary_weekday
-from gwc.web.components.common import icon, now, triggered_click, tz
+from gwc.web.components.common import icon, now, page_header, triggered_click, tz
 from gwc.web.format import fmt_day
 
 POLL_MS = 1000
@@ -25,7 +25,7 @@ def _bubble(role: str, content: str, model: str | None = None) -> dmc.Group:
                 dmc.Text(content, size="sm", style={"whiteSpace": "pre-wrap"}),
                 p="sm",
                 radius="lg",
-                bg="var(--mantine-color-teal-light)",
+                bg="var(--mantine-color-brand-light)",
                 maw="85%",
             ),
             justify="flex-end",
@@ -187,7 +187,11 @@ def _summary_panel() -> dmc.Stack:
 def layout(**_kwargs):
     return dmc.Stack(
         [
-            dmc.Group([icon("tabler:message-chatbot", 28), dmc.Title("Coach", order=2)], gap="sm"),
+            page_header(
+                "Coach",
+                "tabler:message-chatbot",
+                "Ask about your data, or read the weekly summaries.",
+            ),
             dmc.Tabs(
                 [
                     dmc.TabsList(
