@@ -101,6 +101,10 @@ def _chat_panel() -> dmc.Stack:
                         id={"type": "coach-suggest", "index": i},
                         variant="light",
                         size="compact-sm",
+                        # Long suggestions wrap on phones instead of being cut off.
+                        h="auto",
+                        py=4,
+                        styles={"label": {"whiteSpace": "normal", "textAlign": "left"}},
                     )
                     for i, s in enumerate(SUGGESTIONS)
                 ],

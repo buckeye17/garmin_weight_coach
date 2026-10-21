@@ -40,3 +40,16 @@ input, select, textarea {
   padding: 2px 8px;
   border-bottom: 1px solid var(--mantine-color-default-border);
 }
+
+/* Folded phones (~360-400 px): keep tab rows on one line by dropping the icons. */
+@media (max-width: 30em) {
+  .mantine-Tabs-list {
+    flex-wrap: nowrap;
+  }
+  .mantine-Tabs-tab {
+    padding-inline: 8px;
+  }
+  .mantine-Tabs-tabSection {
+    display: none;
+  }
+}

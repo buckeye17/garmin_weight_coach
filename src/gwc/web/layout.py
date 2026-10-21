@@ -10,8 +10,11 @@ from gwc.web.nav import NAV_ITEMS, is_active
 HEADER_HEIGHT = 56
 NAVBAR_WIDTH = 220
 BOTTOM_NAV_HEIGHT = 64
-# Mantine's "sm" breakpoint (48em). Below it the sidebar collapses and the bottom bar shows.
-MOBILE_BREAKPOINT_PX = 768
+# Mantine's "md" breakpoint (62em). Below it the sidebar collapses and the bottom bar shows.
+# "md" rather than "sm" so an unfolded foldable (~750-900 px wide) gets touch navigation and
+# full-width content instead of a sidebar squeezing the page.
+MOBILE_BREAKPOINT = "md"
+MOBILE_BREAKPOINT_PX = 992
 HEADER_POLL_MS = 30_000
 
 THEME = {
@@ -102,7 +105,7 @@ def _bottom_nav() -> dmc.Paper:
     )
     return dmc.Paper(
         dmc.Group(primary + [more], justify="space-around", h="100%", px="xs"),
-        hiddenFrom="sm",
+        hiddenFrom=MOBILE_BREAKPOINT,
         withBorder=True,
         radius=0,
         h=BOTTOM_NAV_HEIGHT,
@@ -130,7 +133,7 @@ def build_layout() -> dmc.MantineProvider:
                             dash.page_container, size="lg", px={"base": "xs", "sm": "md"}
                         ),
                         # Keeps page content clear of the fixed bottom bar on phones.
-                        dmc.Box(h=BOTTOM_NAV_HEIGHT + 16, hiddenFrom="sm"),
+                        dmc.Box(h=BOTTOM_NAV_HEIGHT + 16, hiddenFrom=MOBILE_BREAKPOINT),
                     ]
                 ),
                 _bottom_nav(),
@@ -141,7 +144,7 @@ def build_layout() -> dmc.MantineProvider:
                 "breakpoint": MOBILE_BREAKPOINT_PX,
                 "collapsed": {"mobile": True},
             },
-            padding="md",
+            padding={"base": "xs", MOBILE_BREAKPOINT: "md"},
         ),
         theme=THEME,
         defaultColorScheme="auto",

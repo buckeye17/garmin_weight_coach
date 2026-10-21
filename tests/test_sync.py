@@ -1,3 +1,4 @@
+import sqlite3
 from datetime import date, timedelta
 from zoneinfo import ZoneInfo
 
@@ -5,6 +6,7 @@ import pytest
 from sqlalchemy import func, select
 
 from fakes import FakeAuth, FakeClock, FakeGarmin, activity, sleep, summary, utc, weigh_in
+from gwc.db.backup import backup_database, backup_path, list_backups
 from gwc.db.migrate import upgrade
 from gwc.db.models import (
     Activity,
@@ -203,3 +205,31 @@ def test_recover_interrupted(service, clock):
     assert service.recover_interrupted() == 1
     assert _runs()[0].status is SyncStatus.FAILED
     assert service.run(SyncKind.SCHEDULED).started
+
+
+def test_successful_sync_backs_up_database(service, isolated_settings):
+    service.run(SyncKind.SCHEDULED)
+    copy = backup_path(TODAY)
+    assert list_backups() == [copy]
+    con = sqlite3.connect(copy)
+    try:
+        assert con.execute("SELECT count(*) FROM daily_summary").fetchone()[0] == 31
+    finally:
+        con.close()
+
+
+def test_failed_sync_makes_no_backup(service, garmin):
+    garmin.rate_limit_after = 0
+    assert service.run(SyncKind.SCHEDULED).status is SyncStatus.RATE_LIMITED
+    assert list_backups() == []
+
+
+def test_backups_keep_one_per_day_and_the_newest_14(service, isolated_settings):
+    for i in range(20):
+        backup_database(TODAY - timedelta(days=i))
+    backup_database(TODAY)  # a second sync the same day refreshes that day's copy
+    kept = list_backups()
+    assert len(kept) == 14
+    assert kept[0] == backup_path(TODAY - timedelta(days=13))
+    assert kept[-1] == backup_path(TODAY)
+    assert not list(isolated_settings.backup_dir.glob("*.tmp"))

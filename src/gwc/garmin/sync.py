@@ -3,7 +3,7 @@
 Daily/catch-up/manual syncs re-fetch today plus the last 3 days (Garmin
 finalizes totals and sleep late); the first sync backfills 30 days. Days are
 fetched newest first and committed one at a time, so a sync cut short by a
-rate limit still keeps what it got.
+rate limit still keeps what it got. A successful sync backs up the database.
 """
 
 import logging
@@ -19,6 +19,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
+from gwc.db.backup import backup_database
 from gwc.db.models import (
     Activity,
     BodyComp,
@@ -197,8 +198,16 @@ class SyncService:
                 or 0
             )
         log.info("Garmin sync run %s finished: %s %s", run_id, status.value, error or "")
+        if status is SyncStatus.SUCCESS:
+            self._backup()
         message = "Sync complete" if status is SyncStatus.SUCCESS else (error or status.value)
         return SyncResult(True, message, status, run_id)
+
+    def _backup(self) -> None:
+        try:
+            backup_database(self.today())
+        except Exception:
+            log.exception("Database backup failed")
 
     def _classify_failure(self, exc: Exception) -> tuple[SyncStatus, str]:
         if any(is_rate_limit_error(c) for c in _cause_chain(exc)):

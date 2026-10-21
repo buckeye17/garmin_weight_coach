@@ -252,7 +252,7 @@ LLM calls run as background jobs (`coach/jobs.py`); pages poll for streamed text
 
 ## 9. Web UI
 
-DMC `AppShell` with a sidebar on desktop and bottom navigation on phone; light/dark theme.
+DMC `AppShell` with a sidebar on desktop and bottom navigation below Mantine's `md` breakpoint (992 px), so the OnePlus Open gets touch navigation and full-width content both folded (~380 px) and unfolded (~750–900 px); light/dark theme. On folded widths tab rows drop their icons, and wide tables drop secondary columns rather than scroll.
 
 | Page | Contents |
 |---|---|
@@ -290,7 +290,7 @@ User preferences (units, goal, sync time, guard limits, etc.) are stored in the 
 - `uv run gwc serve` starts waitress on `127.0.0.1:8060` plus the scheduler.
 - `scripts/install_autostart.ps1` registers a Windows Task Scheduler task that runs the app at log on.
 - Phone access: `tailscale serve --bg 8060` publishes the app at `https://<machine>.<tailnet>.ts.net` to tailnet devices only. Nothing is exposed on the LAN or internet.
-- `data/backups/`: the SQLite DB is copied after each successful daily sync; the last 14 copies are kept.
+- `data/backups/`: after each successful Garmin sync the SQLite DB is copied with SQLite's online backup API to `gwc-YYYY-MM-DD.db` (one file per local day; a later sync that day refreshes it). The newest 14 are kept.
 
 ---
 

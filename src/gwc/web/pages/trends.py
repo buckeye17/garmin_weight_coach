@@ -17,6 +17,7 @@ from gwc.web.components.common import card, icon, now, tz
 from gwc.web.format import fmt_day
 
 RANGES = {"30": 30, "90": 90, "365": 365, "all": None}
+NOWRAP = {"whiteSpace": "nowrap"}
 
 
 def _chart_card(title: str, graph_id: str, note: str | None = None) -> dmc.Card:
@@ -249,8 +250,8 @@ def _activities(s, start: date):
                 [
                     dmc.TableTd(fmt_day(a.start_at.astimezone(zone).date())),
                     dmc.TableTd(a.name or a.activity_type.replace("_", " ")),
-                    dmc.TableTd(mins),
-                    dmc.TableTd(kcal),
+                    dmc.TableTd(mins, style=NOWRAP),
+                    dmc.TableTd(kcal, style=NOWRAP),
                 ]
             )
         )
@@ -258,7 +259,7 @@ def _activities(s, start: date):
         dmc.TableTr([dmc.TableTh(h) for h in ("Day", "Activity", "Time", "kcal")])
     )
     return dmc.TableScrollContainer(
-        dmc.Table([head, dmc.TableTbody(body)], fz="sm", highlightOnHover=True), minWidth=360
+        dmc.Table([head, dmc.TableTbody(body)], fz="sm", highlightOnHover=True), minWidth=300
     )
 
 

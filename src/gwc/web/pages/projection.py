@@ -144,8 +144,10 @@ def _figure(
             y=kg_to(p.expected[-1], unit),
             text=fmt_weight(p.expected[-1], unit),
             showarrow=False,
-            xanchor="left",
-            xshift=6,
+            # Above the line's end rather than past it, so it isn't clipped on narrow screens.
+            xanchor="right",
+            yanchor="bottom",
+            yshift=4,
             font={"size": 11, "color": charts.ink(scheme, "text")},
         )
     if goal and snap.weight_kg is not None:
@@ -168,11 +170,18 @@ def _figure(
 def _table(projections: list[Projection], unit: WeightUnit):
     if not projections:
         return None
+    # Burn is the same for every scenario (it's in the stat card), and the 10–90% range is
+    # on the chart, so phones drop both columns to fit without scrolling.
+    wide = {"visibleFrom": "sm"}
     head = dmc.TableThead(
         dmc.TableTr(
             [
-                dmc.TableTh(h)
-                for h in ("Scenario", "Eating", "Burn", "In 4 weeks", "10–90%", "Per week")
+                dmc.TableTh("Scenario"),
+                dmc.TableTh("Eating"),
+                dmc.TableTh("Burn", **wide),
+                dmc.TableTh("In 4 weeks"),
+                dmc.TableTh("10–90%", **wide),
+                dmc.TableTh("Per week"),
             ]
         )
     )
@@ -181,10 +190,12 @@ def _table(projections: list[Projection], unit: WeightUnit):
             [
                 dmc.TableTd(p.label),
                 dmc.TableTd(f"{p.intake_kcal:,.0f}"),
-                dmc.TableTd(f"{p.tdee_kcal:,.0f}"),
+                dmc.TableTd(f"{p.tdee_kcal:,.0f}", **wide),
                 dmc.TableTd(fmt_weight(p.expected[-1], unit)),
                 dmc.TableTd(
-                    f"{kg_to(p.p10[-1], unit):,.1f}–{kg_to(p.p90[-1], unit):,.1f}", c="dimmed"
+                    f"{kg_to(p.p10[-1], unit):,.1f}–{kg_to(p.p90[-1], unit):,.1f}",
+                    c="dimmed",
+                    **wide,
                 ),
                 dmc.TableTd(f"{kg_to(p.change_kg / 4, unit):+.1f} {unit}"),
             ]
@@ -193,7 +204,7 @@ def _table(projections: list[Projection], unit: WeightUnit):
     ]
     return dmc.TableScrollContainer(
         dmc.Table([head, dmc.TableTbody(rows)], fz="sm", highlightOnHover=True),
-        minWidth=520,
+        minWidth=300,
     )
 
 
