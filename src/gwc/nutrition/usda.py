@@ -7,6 +7,7 @@ picked. See https://fdc.nal.usda.gov/api-guide
 """
 
 import logging
+import re
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
@@ -30,6 +31,7 @@ NUMBER_TO_KEY = {
     "307": "sodium_mg",
 }
 SUGAR_PREFIX = "269"  # "269" Total Sugars, "269.3" Sugars, Total (Foundation)
+_HAS_METRIC = re.compile(r"\d\s*(g|ml)\b", re.IGNORECASE)  # "3/4 cup (20g)"
 
 
 class UsdaError(Exception):
@@ -74,7 +76,11 @@ class UsdaHit:
 
 
 def _nutrients(rows: list[dict[str, Any]], *, nested: bool) -> dict[str, float | None]:
-    """Map FDC nutrient rows to our keys. `nested` is the detail-endpoint shape."""
+    """Map FDC nutrient rows to our keys. `nested` is the detail-endpoint shape.
+
+    The first row for a nutrient wins: Branded foods can list a second panel
+    (e.g. prepared, or a toddler serving) after the label's as-sold values.
+    """
     values: dict[str, float] = {}
     energy: dict[str, float] = {}
     for row in rows or []:
@@ -87,9 +93,9 @@ def _nutrients(rows: list[dict[str, Any]], *, nested: bool) -> dict[str, float |
             continue
         number = str(number)
         if number in ENERGY_NUMBERS and str(unit).lower() == "kcal":
-            energy[number] = float(value)
+            energy.setdefault(number, float(value))
         elif number in NUMBER_TO_KEY:
-            values[NUMBER_TO_KEY[number]] = float(value)
+            values.setdefault(NUMBER_TO_KEY[number], float(value))
         elif number.startswith(SUGAR_PREFIX) and "sugar_g" not in values:
             values["sugar_g"] = float(value)
     kcal = next((energy[n] for n in ENERGY_NUMBERS if n in energy), None)
@@ -112,11 +118,12 @@ def _branded_serving(food: dict[str, Any]) -> list[Serving]:
         return []
     household = (food.get("householdServingFullText") or "").strip()
     unit_label = "ml" if unit.startswith("m") else "g"
-    label = (
-        f"{household} ({size:g} {unit_label})"
-        if household
-        else f"1 serving ({size:g} {unit_label})"
-    )
+    if household and _HAS_METRIC.search(household):
+        label = household
+    elif household:
+        label = f"{household} ({size:g} {unit_label})"
+    else:
+        label = f"1 serving ({size:g} {unit_label})"
     # Liquids are treated as 1 g/ml.
     return [Serving(label, float(size))]
 
@@ -221,6 +228,27 @@ class UsdaClient:
         if len(self._cache) > self._cache_size:
             self._cache.popitem(last=False)
         return hits
+
+    def find_gtin(self, gtin: str, codes: list[str]) -> UsdaHit | None:
+        """The newest Branded food whose UPC is `gtin` (GTIN-14), searching each written form.
+
+        FDC stores a UPC as 12, 13 or 14 digits and only matches the exact string.
+        """
+        data = self._request(
+            "POST",
+            "/foods/search",
+            {"query": " OR ".join(codes), "dataType": BRANDED_TYPES, "pageSize": 10},
+        )
+        matches = [
+            f
+            for f in data.get("foods") or []
+            if f.get("fdcId")
+            and "".join(c for c in str(f.get("gtinUpc") or "") if c.isdigit()).zfill(14) == gtin
+        ]
+        if not matches:
+            return None
+        newest = max(matches, key=lambda f: f.get("publishedDate") or "")
+        return parse_search_hit(newest)
 
     def servings_for(self, hit: UsdaHit) -> list[Serving]:
         """Hit servings, fetching portions from the detail endpoint when search has none."""

@@ -242,6 +242,18 @@ class FoodServing(Base):
     food: Mapped[Food] = relationship(back_populates="servings")
 
 
+class FoodBarcode(TimestampMixin, Base):
+    """A scanned product barcode and the food it was confirmed as, so a rescan needs no lookup."""
+
+    __tablename__ = "food_barcode"
+
+    gtin: Mapped[str] = mapped_column(String(14), primary_key=True)  # zero-padded GTIN-14
+    food_id: Mapped[int] = mapped_column(ForeignKey("food.id", ondelete="CASCADE"), index=True)
+    source: Mapped[str] = mapped_column(String(16))  # usda | off | label | manual
+
+    food: Mapped[Food] = relationship()
+
+
 class RecipeItem(Base):
     __tablename__ = "recipe_item"
 

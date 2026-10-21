@@ -20,6 +20,7 @@ def _clear_caches():
         factory.cache_clear()
     jobs.get_jobs.cache_clear()
     nutrition_service.get_usda.cache_clear()
+    nutrition_service.get_off.cache_clear()
     llm.set_backend_override(None)
 
 

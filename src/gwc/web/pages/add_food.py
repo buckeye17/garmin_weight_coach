@@ -13,6 +13,7 @@ from gwc.nutrition.usda import UsdaError, UsdaHit
 from gwc.web.components.ai_log import ai_panel
 from gwc.web.components.common import icon, page_header, triggered_click
 from gwc.web.components.log_modal import log_modal
+from gwc.web.components.scan import scan_panel
 
 SOURCE_BADGE = {FoodSource.USDA: "USDA", FoodSource.CUSTOM: "Mine", FoodSource.RECIPE: "Recipe"}
 
@@ -74,7 +75,7 @@ def layout(**_kwargs):
             page_header(
                 "Add food",
                 "tabler:circle-plus",
-                "Search USDA, reuse your own foods, or describe a meal.",
+                "Search USDA, reuse your own foods, describe a meal, or scan a package.",
             ),
             dmc.Alert(
                 id="logm-result",
@@ -95,6 +96,7 @@ def layout(**_kwargs):
                             dmc.TabsTab(
                                 "Describe", value="ai", leftSection=icon("tabler:sparkles")
                             ),
+                            dmc.TabsTab("Scan", value="scan", leftSection=icon("tabler:barcode")),
                         ],
                         grow=True,
                     ),
@@ -142,6 +144,7 @@ def layout(**_kwargs):
                         value="mine",
                     ),
                     dmc.TabsPanel(ai_panel(), value="ai"),
+                    dmc.TabsPanel(scan_panel(), value="scan"),
                 ],
                 id="add-tabs",
                 value="usda",

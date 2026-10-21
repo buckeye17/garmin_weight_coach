@@ -10,15 +10,15 @@
   and fetch tools: their answers always carry citations, which can't be combined
   with a JSON-schema answer in one request.
 
-Both take the same request: a system prompt, a text-only conversation, the
-app's tools, optionally web access, and optionally a JSON schema the final
-answer must follow.
+Both take the same request: a system prompt, a text conversation (optionally
+with photos attached to its last message), the app's tools, optionally web
+access, and optionally a JSON schema the final answer must follow.
 """
 
 import asyncio
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 from urllib.parse import urlparse
@@ -79,6 +79,18 @@ class ToolSpec:
         return json.dumps(self.handler(args), default=str)
 
 
+@dataclass(frozen=True)
+class ImageInput:
+    media_type: str  # "image/jpeg", "image/png", "image/webp"
+    data: str  # base64
+
+    def block(self) -> dict[str, Any]:
+        return {
+            "type": "image",
+            "source": {"type": "base64", "media_type": self.media_type, "data": self.data},
+        }
+
+
 @dataclass
 class LLMRequest:
     system: str
@@ -91,6 +103,7 @@ class LLMRequest:
     on_turn: Callable[[], None] | None = None  # a new assistant turn started
     on_activity: Callable[[str], None] | None = None  # tool activity for the UI
     web: bool = False  # let Claude search and read the web
+    images: list[ImageInput] = field(default_factory=list)  # sent with the last user message
 
 
 @dataclass
@@ -136,6 +149,13 @@ def transcript_prompt(messages: list[dict[str, str]]) -> str:
         lines.append(f"\n{who}:\n{m['content']}")
     lines.append(f"\nThe user's new message:\n{messages[-1]['content']}")
     return "\n".join(lines)
+
+
+def with_images(text: str, images: list[ImageInput]) -> str | list[dict[str, Any]]:
+    """A user message's content: the text alone, or the photos followed by the text."""
+    if not images:
+        return text
+    return [*(i.block() for i in images), {"type": "text", "text": text}]
 
 
 # --------------------------------------------------------------------------- subscription
@@ -201,6 +221,23 @@ class SubscriptionBackend:
     def run(self, req: LLMRequest) -> LLMResult:
         return asyncio.run(self._run(req))
 
+    @staticmethod
+    def prompt(req: LLMRequest) -> str | AsyncIterator[dict[str, Any]]:
+        """The prompt for `query`: a string, or a one-message stream when photos are attached."""
+        text = transcript_prompt(req.messages)
+        if not req.images:
+            return text
+
+        async def stream() -> AsyncIterator[dict[str, Any]]:
+            yield {
+                "type": "user",
+                "session_id": "",
+                "message": {"role": "user", "content": with_images(text, req.images)},
+                "parent_tool_use_id": None,
+            }
+
+        return stream()
+
     async def _run(self, req: LLMRequest) -> LLMResult:
         from claude_agent_sdk import (
             AssistantMessage,
@@ -219,7 +256,7 @@ class SubscriptionBackend:
         model = None
         last_text = ""
         try:
-            async for msg in query(prompt=transcript_prompt(req.messages), options=options):
+            async for msg in query(prompt=self.prompt(req), options=options):
                 if isinstance(msg, StreamEvent):
                     event = msg.event or {}
                     if event.get("type") == "message_start" and req.on_turn:
@@ -378,6 +415,8 @@ class ApiBackend:
 
         client = anthropic.Anthropic(api_key=self.api_key)
         messages: list[dict[str, Any]] = [dict(m) for m in req.messages]
+        if req.images:
+            messages[-1]["content"] = with_images(messages[-1]["content"], req.images)
         tools = {t.name: t for t in req.tools}
         calls: list[str] = []
         try:
