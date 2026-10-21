@@ -1,5 +1,6 @@
 import argparse
 import logging
+import os
 
 from gwc.config import get_settings
 
@@ -30,6 +31,10 @@ def cmd_serve(args: argparse.Namespace) -> None:
     host = args.host or settings.host
     port = args.port or settings.port
 
+    # The debug reloader runs the app in a child process; only that one schedules syncs.
+    if not args.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+        _start_scheduler()
+
     if args.debug:
         app.run(host=host, port=port, debug=True)
         return
@@ -38,6 +43,13 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
     log.info("Serving on http://%s:%s", host, port)
     serve(app.server, host=host, port=port, threads=8)
+
+
+def _start_scheduler() -> None:
+    from gwc.garmin.service import get_runner, get_sync_service
+    from gwc.scheduler import SyncScheduler
+
+    SyncScheduler(get_sync_service(), get_runner()).start()
 
 
 def cmd_db_upgrade(_args: argparse.Namespace) -> None:

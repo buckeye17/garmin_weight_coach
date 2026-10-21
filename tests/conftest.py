@@ -2,6 +2,20 @@ import pytest
 
 from gwc import config
 from gwc.db import session
+from gwc.garmin import service
+
+
+def _clear_caches():
+    config.get_settings.cache_clear()
+    session.get_engine.cache_clear()
+    session._session_factory.cache_clear()
+    for factory in (
+        service.get_guard,
+        service.get_auth,
+        service.get_sync_service,
+        service.get_runner,
+    ):
+        factory.cache_clear()
 
 
 @pytest.fixture(autouse=True)
@@ -11,10 +25,6 @@ def isolated_settings(tmp_path, monkeypatch):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("GWC_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setitem(config.Settings.model_config, "env_file", None)
-    config.get_settings.cache_clear()
-    session.get_engine.cache_clear()
-    session._session_factory.cache_clear()
+    _clear_caches()
     yield config.get_settings()
-    config.get_settings.cache_clear()
-    session.get_engine.cache_clear()
-    session._session_factory.cache_clear()
+    _clear_caches()

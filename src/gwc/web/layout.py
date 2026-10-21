@@ -12,6 +12,7 @@ NAVBAR_WIDTH = 220
 BOTTOM_NAV_HEIGHT = 64
 # Mantine's "sm" breakpoint (48em). Below it the sidebar collapses and the bottom bar shows.
 MOBILE_BREAKPOINT_PX = 768
+HEADER_POLL_MS = 30_000
 
 THEME = {
     "primaryColor": "teal",
@@ -32,11 +33,16 @@ def _header() -> dmc.AppShellHeader:
                     [_icon("tabler:scale", 24), dmc.Title("Weight Coach", order=4)],
                     gap="xs",
                 ),
-                dmc.Badge(
-                    "Garmin: not connected",
-                    id="sync-status-badge",
-                    variant="light",
-                    color="gray",
+                dmc.Anchor(
+                    dmc.Badge(
+                        "Garmin",
+                        id="sync-status-badge",
+                        variant="light",
+                        color="gray",
+                        maw={"base": 200, "sm": 420},
+                    ),
+                    href="/settings",
+                    underline="never",
                 ),
             ],
             h="100%",
@@ -113,6 +119,7 @@ def build_layout() -> dmc.MantineProvider:
         dmc.AppShell(
             [
                 dcc.Location(id="url"),
+                dcc.Interval(id="header-poll", interval=HEADER_POLL_MS),
                 _header(),
                 _navbar(),
                 dmc.AppShellMain(
@@ -146,3 +153,19 @@ def build_layout() -> dmc.MantineProvider:
 )
 def _highlight_bottom_nav(pathname: str | None, ids: list[dict]) -> list[str]:
     return ["teal" if is_active(i["href"], pathname) else "dimmed" for i in ids]
+
+
+@callback(
+    Output("sync-status-badge", "children"),
+    Output("sync-status-badge", "color"),
+    Input("header-poll", "n_intervals"),
+    Input("url", "pathname"),
+)
+def _update_sync_badge(_n, _pathname) -> tuple[str, str]:
+    from gwc.garmin.service import get_sync_service
+    from gwc.garmin.status import badge, get_overview
+    from gwc.web.format import fmt_when
+
+    service = get_sync_service()
+    now = service.clock()
+    return badge(get_overview(), lambda dt: fmt_when(dt, service.tz, now))

@@ -58,3 +58,27 @@ def test_bottom_nav_highlight():
     ids = [{"type": "bottom-nav", "href": i.href} for i in NAV_ITEMS if i.mobile_primary]
     colors = _highlight_bottom_nav("/projection", ids)
     assert colors == ["dimmed", "dimmed", "teal", "dimmed"]
+
+
+def test_settings_refresh_without_garmin(app):
+    from gwc.db.migrate import upgrade
+    from gwc.web.pages import settings
+
+    upgrade()
+    out = settings.refresh(None, 0)
+    assert len(out) == 21
+    badge_text, _color, conn_text, creds_display, connect_label, connect_disabled = out[:6]
+    assert badge_text == "Not connected"
+    assert creds_display == "block"  # no credentials in the test environment
+    assert connect_label == "Connect" and connect_disabled is True
+    sync_disabled, hint = out[7], out[8]
+    assert sync_disabled is True
+    assert hint == "Connect Garmin first"
+
+
+def test_header_badge_without_garmin(app):
+    from gwc.db.migrate import upgrade
+    from gwc.web.layout import _update_sync_badge
+
+    upgrade()
+    assert _update_sync_badge(None, "/") == ("Garmin: not connected", "gray")

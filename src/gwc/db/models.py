@@ -131,17 +131,6 @@ class Activity(TimestampMixin, Base):
     avg_hr: Mapped[int | None] = mapped_column(Integer)
 
 
-class GarminDevice(TimestampMixin, Base):
-    """Watch/scale upload times, used to flag days whose data may be incomplete."""
-
-    __tablename__ = "garmin_device"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    garmin_device_id: Mapped[int] = mapped_column(BigInteger, unique=True)
-    name: Mapped[str | None] = mapped_column(String(255))
-    last_upload_at: Mapped[datetime | None]
-
-
 class SyncKind(StrEnum):
     BACKFILL = "backfill"
     SCHEDULED = "scheduled"

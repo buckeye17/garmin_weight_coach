@@ -121,7 +121,9 @@ Stored both as normalized columns and as raw JSON (`garmin_raw`) so data can be 
 | `daily_summary` | total / active / resting (BMR) kcal, steps, resting HR, stress, Body Battery |
 | `sleep` | start/end timestamps, duration, stages, sleep score, HRV, `calendar_date` (wake date), nap flag |
 | `activity` | type, start, duration, distance, kcal |
-| `device_upload` | watch's last upload time to Garmin (for provisional-day detection) |
+| `setting` → `garmin.last_device_sync_at` | watch's last upload time to Garmin (`get_sync_timestamp`, for provisional-day detection) |
+
+Requests per sync: body composition and activities are fetched once for the whole window; daily summary and sleep once per day; plus one device-sync timestamp. A daily sync is ~14 requests; the 30-day backfill ~66.
 
 ### 4.3 Schedule
 - **First connect:** backfill the last 30 days.
@@ -141,7 +143,7 @@ Garmin publishes no limits for the endpoints `garminconnect` uses (the 200/6,000
 | Manual sync cooldown (since the start of any sync) | 30 min |
 | Manual syncs per calendar day | 6 |
 | Login attempts per rolling 24 h | 3; no automatic retry after a failure |
-| On HTTP 429 / Cloudflare challenge during data sync | stop immediately; lock out 1 h → 4 h → 24 h on repeats |
+| On HTTP 429 / Cloudflare challenge during data sync | stop immediately; lock out 1 h → 4 h → 24 h if it happens again within 24 h of the previous lockout ending |
 | On HTTP 429 during login | lock out 24 h |
 
 The Sync button is disabled while a guard applies and shows why (e.g. "Available in 12 min", "Daily manual limit reached", "Garmin rate-limited us — retry after 15:40"). Scheduled and catch-up syncs respect lockouts and run once a lockout expires.
