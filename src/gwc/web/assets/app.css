@@ -214,3 +214,10 @@ input, select, textarea {
     font-size: 1.25rem;
   }
 }
+
+/* Phones: give card content the width back from the roomier desktop padding. */
+@media (max-width: 36em) {
+  .mantine-Card-root {
+    --card-padding: var(--mantine-spacing-md) !important;
+  }
+}
