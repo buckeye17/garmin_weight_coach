@@ -330,7 +330,7 @@ def render(scheme):
         snap = build_snapshot(s, zone, at)
         plan = day_targets(s, zone, at, snap.today, snap=snap)
         goal = goal_kg_per_month(s)
-    projections = scenarios(snap, plan.values.get("kcal"))
+    projections = scenarios(snap, plan.typical_kcal)
 
     week_ago = next((p for p in snap.trend if p.day == snap.today - timedelta(days=7)), None)
     if snap.weight_kg is not None and week_ago is not None:

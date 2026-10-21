@@ -3,6 +3,7 @@ import dash_mantine_components as dmc
 from dash import ALL, Input, Output, State, callback, dcc, no_update
 from dash_iconify import DashIconify
 
+from gwc.analysis.exercise import EAT_BACK_PREF
 from gwc.analysis.snapshot import build_snapshot
 from gwc.analysis.targets import (
     TDEE_METHOD_PREF,
@@ -334,6 +335,21 @@ def _targets_card() -> dmc.Card:
                     align="flex-start",
                     grow=True,
                 ),
+                dmc.NumberInput(
+                    id="eat-back-pct",
+                    label="Workout calories added back (%)",
+                    description=(
+                        "Share of each Garmin workout's calories above resting that's added "
+                        "to that day's target after a sync. Base targets leave workouts out, "
+                        "so 0 means you don't eat workouts back at all."
+                    ),
+                    min=0,
+                    max=100,
+                    step=5,
+                    allowDecimal=False,
+                    suffix="%",
+                    inputProps={"inputMode": "numeric"},
+                ),
                 dmc.Alert(id="targets-summary", color="teal", variant="light", p="xs"),
                 dmc.Text(
                     "Overrides: leave blank to use the suggestion shown in each box. Changes "
@@ -623,6 +639,7 @@ def sync_now(_clicks, signal):
     Output("pref-fallback-hour", "value"),
     Output({"type": "target-input", "key": ALL}, "value"),
     Output("tdee-method", "value"),
+    Output("eat-back-pct", "value"),
     Output("adv-weekly-pct", "value"),
     Output("adv-kcal-kg", "value"),
     Output("adv-alpha", "value"),
@@ -637,6 +654,7 @@ def load_prefs(_):
         get_pref("food_day_fallback_hour"),
         [targets.get(n.key) for n in NUTRIENTS],
         get_pref(TDEE_METHOD_PREF),
+        get_pref(EAT_BACK_PREF),
         get_pref("analysis.max_weekly_loss_pct"),
         get_pref("analysis.kcal_per_kg_lost"),
         get_pref("analysis.trend_alpha"),
@@ -706,6 +724,7 @@ def _clamp(value, lo: float, hi: float, default: float) -> float:
     Input("targets-save", "n_clicks"),
     State("goal-input", "value"),
     State("tdee-method", "value"),
+    State("eat-back-pct", "value"),
     State({"type": "target-input", "key": ALL}, "value"),
     State("adv-weekly-pct", "value"),
     State("adv-kcal-kg", "value"),
@@ -714,9 +733,10 @@ def _clamp(value, lo: float, hi: float, default: float) -> float:
     State("prefs-saved", "data"),
     prevent_initial_call=True,
 )
-def save_targets(_clicks, goal, method, values, weekly, kcal_kg, alpha, window, saved):
+def save_targets(_clicks, goal, method, eat_back, values, weekly, kcal_kg, alpha, window, saved):
     set_goal(None if goal in (None, "") else to_kg(float(goal), weight_unit()))
     set_pref(TDEE_METHOD_PREF, method or "auto")
+    set_pref(EAT_BACK_PREF, int(_clamp(eat_back, 0, 100, 75)))
     set_manual_targets({n.key: v for n, v in zip(NUTRIENTS, values, strict=True)})
     set_pref("analysis.max_weekly_loss_pct", _clamp(weekly, 0.1, 2.0, 1.0))
     set_pref("analysis.kcal_per_kg_lost", _clamp(kcal_kg, 0, 60, 22.0))

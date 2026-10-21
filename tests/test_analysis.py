@@ -6,6 +6,12 @@ import pytest
 from fakes import utc
 from gwc.analysis import energy, targets
 from gwc.analysis.days import DayRecord, load_days
+from gwc.analysis.exercise import (
+    EAT_BACK_PREF,
+    net_by_calendar_date,
+    net_kcal,
+    workouts_by_food_day,
+)
 from gwc.analysis.food_day import FoodDays
 from gwc.analysis.projection import project, simulate
 from gwc.analysis.snapshot import build_snapshot
@@ -13,9 +19,18 @@ from gwc.analysis.tdee import adaptive_tdee, choose, garmin_tdee, linear_slope
 from gwc.analysis.trend import Weighin, daily_weighins, ewma, weight_trend
 from gwc.analysis.units import KG_PER_LB
 from gwc.db.migrate import upgrade
-from gwc.db.models import BodyComp, DailySummary, DailyTarget, FoodLog, LogSource
+from gwc.db.models import (
+    Activity,
+    BodyComp,
+    DailySummary,
+    DailyTarget,
+    FoodLog,
+    LogSource,
+)
 from gwc.db.session import session_scope
 from gwc.nutrition import log
+from gwc.prefs import set_pref
+from gwc.web.components.analysis_text import plan_summary, workout_summary
 
 NY = ZoneInfo("America/New_York")
 D0 = date(2026, 10, 1)
@@ -113,6 +128,13 @@ def test_garmin_tdee_uses_last_7_final_days():
     assert est.resting_kcal == 2000
     assert est.se == pytest.approx(150)  # only the 5% systematic part; the days agree
     assert not garmin_tdee([rec(0, garmin=None)]).ready
+
+
+def test_garmin_tdee_base_leaves_out_workouts():
+    days = [rec(i, garmin=3000, garmin_exercise=700 if i == 3 else 0) for i in range(7)]
+    est = garmin_tdee(days)
+    assert est.kcal == 3000 and est.exercise_kcal == pytest.approx(100)
+    assert est.base_kcal == pytest.approx(2900)
 
 
 def _losing(days: int, intake: float, kg_per_day: float, start: float = 120):
@@ -356,4 +378,124 @@ def test_day_targets_freeze_and_refreeze(db):
     with session_scope() as s:
         again = targets.day_targets(s, NY, NOW, today)
         assert again.values["kcal"] > first_kcal
-        assert targets.frozen_targets(s, today, today) == {today: again.values["kcal"]}
+        assert targets.frozen_targets(s, NY, today, today) == {today: again.values["kcal"]}
+
+
+# --------------------------------------------------------------------------- workouts
+
+
+def _workout(s, at: datetime, kcal: float, minutes: float, n: int = 1, name: str = "Run"):
+    s.add(
+        Activity(
+            garmin_activity_id=n,
+            activity_type="running",
+            name=name,
+            start_at=at,
+            duration_s=minutes * 60,
+            kcal=kcal,
+        )
+    )
+
+
+def test_net_kcal():
+    assert net_kcal(500, 3600, 2400) == pytest.approx(400)
+    assert net_kcal(50, 3600, 2400) == 0
+    assert net_kcal(None, 3600, 2400) == 0
+    assert net_kcal(300, None, None) == 300
+
+
+def test_workouts_follow_food_days(db):
+    with session_scope() as s:
+        s.add(DailySummary(calendar_date=day(1), resting_kcal=2400, is_provisional=False))
+        # 01:00 on Oct 2 is still food day Oct 1 for a night owl; 10:00 is Oct 2.
+        _workout(s, datetime(2026, 10, 2, 1, 0, tzinfo=NY), 500, 60, n=1)
+        _workout(s, datetime(2026, 10, 2, 10, 0, tzinfo=NY), 300, 30, n=2)
+    with session_scope() as s:
+        by_day = workouts_by_food_day(s, NY, day(0), day(1))
+        by_date = net_by_calendar_date(s, NY, day(0), day(1))
+    assert [w.kcal for w in by_day[day(0)]] == [500]
+    assert [w.kcal for w in by_day[day(1)]] == [300]
+    assert by_day[day(0)][0].net_kcal == pytest.approx(400)
+    # Garmin's totals are by calendar date, so the base burn pairs both with Oct 2.
+    assert by_date == {day(1): pytest.approx(400 + 250)}
+
+
+def test_day_in_progress_uses_finished_days_resting_rate(db):
+    with session_scope() as s:
+        s.add(DailySummary(calendar_date=day(0), resting_kcal=2400, is_provisional=False))
+        # Garmin accrues resting kcal through the day, so today's reads low until it ends.
+        s.add(DailySummary(calendar_date=day(1), resting_kcal=1200, is_provisional=True))
+        _workout(s, datetime(2026, 10, 2, 18, 0, tzinfo=NY), 500, 60)
+    with session_scope() as s:
+        (w,) = workouts_by_food_day(s, NY, day(1), day(1))[day(1)]
+    assert w.net_kcal == pytest.approx(400)
+
+
+def test_todays_workouts_raise_todays_targets(db):
+    today = date(2026, 10, 20)
+    with session_scope() as s:
+        _seed(s)
+        _workout(s, NOW - timedelta(days=3), 600, 60, n=1)  # in the burn window
+        targets.set_goal(2.0)
+    with session_scope() as s:
+        snap = build_snapshot(s, NY, NOW)
+        avg = (600 - 2300 / 24) / 21  # one workout over the 21-day trend window
+        assert snap.chosen.exercise_kcal == pytest.approx(avg)
+        before = targets.day_targets(s, NY, NOW, today, snap=snap)
+        assert before.workout_kcal == 0 and before.values == before.base_values
+        assert before.tdee_kcal == pytest.approx(snap.chosen.kcal - avg)
+        assert before.typical_kcal == pytest.approx(before.values["kcal"] + 0.75 * avg)
+    with session_scope() as s:
+        _workout(s, NOW - timedelta(hours=2), 600, 60, n=2)  # today, after the freeze
+    with session_scope() as s:
+        after = targets.day_targets(s, NY, NOW, today)
+        # 75 % of 600 − 1 h of resting (2,300/24) = 378 → 380.
+        assert after.workout_kcal == 380
+        assert after.values["kcal"] == before.values["kcal"] + 380
+        assert after.values["carbs_g"] == before.values["carbs_g"] + 71  # 75 % of 380 / 4
+        assert after.values["fat_g"] == before.values["fat_g"] + 11  # 25 % of 380 / 9
+        assert after.values["protein_g"] == before.values["protein_g"]
+        assert after.values["fiber_g"] == before.values["fiber_g"] + 5
+        # The frozen row keeps the base, so later syncs keep adjusting it.
+        assert s.get(DailyTarget, today).kcal == before.values["kcal"]
+        assert targets.frozen_targets(s, NY, today, today) == {today: after.values["kcal"]}
+    assert workout_summary(after).startswith("+380 kcal for Run (60 min): 75% of 504 kcal")
+    assert "without workouts" in plan_summary(after, "lb")
+
+
+def test_workouts_add_on_top_of_overrides(db):
+    today = date(2026, 10, 20)
+    with session_scope() as s:
+        _seed(s)
+        _workout(s, NOW - timedelta(hours=2), 600, 60)
+    targets.set_manual_targets({"kcal": 2500, "fat_g": 80})
+    set_pref(EAT_BACK_PREF, 100)
+    with session_scope() as s:
+        plan = targets.day_targets(s, NY, NOW, today)
+    assert plan.workout_kcal == 500  # 504 net at 100 %
+    assert plan.values["kcal"] == 3000
+    assert plan.values["fat_g"] == 80  # overridden, so carbs take it all
+    assert plan.values["carbs_g"] == plan.base_values["carbs_g"] + 125
+
+
+def test_days_recorded_before_workouts_get_no_adjustment(db):
+    today = date(2026, 10, 20)
+    with session_scope() as s:
+        _seed(s)
+        _workout(s, NOW - timedelta(hours=2), 600, 60)
+        values = dict(kcal=2800, protein_g=150, carbs_g=300, fat_g=80, fiber_g=40)
+        s.add(
+            DailyTarget(
+                food_day=today,
+                **values,
+                sugar_g=70,
+                sodium_mg=2300,
+                tdee_method="garmin",
+                tdee_kcal=3100,
+                details={"flags": []},
+            )
+        )
+    with session_scope() as s:
+        plan = targets.day_targets(s, NY, NOW, today)
+        assert plan.values["kcal"] == 2800 and plan.workout_kcal == 0
+        assert targets.frozen_targets(s, NY, today, today) == {today: 2800}

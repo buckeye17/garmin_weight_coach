@@ -10,10 +10,17 @@ Anything set in Settings overrides its suggestion, and overridden calories,
 protein or fat feed into the macros derived from them. A food day's targets
 are frozen into `daily_target` the first time they're computed, so later
 syncs don't move them; changing the goal or overrides re-computes today.
+
+Workouts: the frozen targets start from burn without workouts, and each food
+day adds `eat_back_pct` of its own Garmin workouts' net kcal (exercise.py),
+live, so a sync after a workout raises that day's calories, on top of a
+manual calorie override too. The extra goes 25/75 to fat/carbs (whichever
+isn't overridden), with fiber and sugar scaled along. Days recorded before
+this existed have no `eat_back_pct` and get no adjustment.
 """
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
@@ -21,6 +28,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from gwc.analysis.energy import DAYS_PER_MONTH
+from gwc.analysis.exercise import EAT_BACK_PREF, Workout, workouts_by_food_day
 from gwc.analysis.food_day import current_food_day
 from gwc.analysis.snapshot import Snapshot, build_snapshot
 from gwc.db.models import DailyTarget
@@ -61,10 +69,24 @@ class TargetPlan:
     floor_kcal: float | None = None
     flags: list[str] = field(default_factory=list)
     frozen: bool = False
+    # Workouts. `tdee_kcal` above is the burn without them.
+    eat_back_pct: float | None = None  # None: recorded before the workout adjustment
+    workout_avg_kcal: float | None = None  # mean net workout kcal/day behind the burn estimate
+    workouts: list[Workout] = field(default_factory=list)  # this food day's
+    workout_kcal: float = 0.0  # added to calories for them
+    base_values: dict[str, float | None] = field(default_factory=dict)  # before workouts
 
     @property
     def complete(self) -> bool:
         return all(self.values.get(k) is not None for k in NUTRIENT_KEYS)
+
+    @property
+    def typical_kcal(self) -> float | None:
+        """Calories on a day with your average workouts, for projections."""
+        base = (self.base_values or self.values).get("kcal")
+        if base is None or self.eat_back_pct is None:
+            return base
+        return base + self.eat_back_pct / 100 * (self.workout_avg_kcal or 0.0)
 
     def details(self) -> dict:
         return {
@@ -75,6 +97,8 @@ class TargetPlan:
             "deficit_kcal": self.deficit_kcal,
             "floor_kcal": self.floor_kcal,
             "flags": self.flags,
+            "eat_back_pct": self.eat_back_pct,
+            "workout_avg_kcal": self.workout_avg_kcal,
         }
 
 
@@ -183,9 +207,10 @@ def suggest(
 
 
 def plan_from_snapshot(s: Session, snap: Snapshot) -> TargetPlan:
+    """Today's base targets: from burn without workouts (see `add_workouts`)."""
     plan = suggest(
         goal_kg_per_month=goal_kg_per_month(s),
-        tdee_kcal=snap.chosen.kcal,
+        tdee_kcal=snap.chosen.base_kcal,
         tdee_method=snap.chosen.method if snap.chosen.ready else None,
         resting_kcal=snap.garmin.resting_kcal,
         weight_kg=snap.weight_kg,
@@ -196,6 +221,55 @@ def plan_from_snapshot(s: Session, snap: Snapshot) -> TargetPlan:
     )
     if snap.body_fat_assumed:
         plan.flags.append(ASSUMED_BODY_FAT)
+    plan.eat_back_pct = float(get_pref(EAT_BACK_PREF, session=s))
+    plan.workout_avg_kcal = snap.chosen.exercise_kcal
+    return plan
+
+
+# --------------------------------------------------------------------------- workouts
+
+
+def workout_kcal(eat_back_pct: float | None, workouts: list[Workout]) -> float:
+    """Calories a day's workouts add to its target."""
+    if not eat_back_pct:
+        return 0.0
+    return _r(eat_back_pct / 100 * sum(w.net_kcal for w in workouts), 10)
+
+
+def _with_extra_kcal(
+    values: dict[str, float | None], extra: float, overridden: list[str]
+) -> dict[str, float | None]:
+    out = dict(values)
+    out["kcal"] = values["kcal"] + extra
+    free = [k for k in ("fat_g", "carbs_g") if k not in overridden and out.get(k) is not None]
+    fat_share = {("fat_g",): 1.0, ("carbs_g",): 0.0}.get(tuple(free), FAT_MIN_KCAL_SHARE)
+    if "fat_g" in free:
+        out["fat_g"] = _r(out["fat_g"] + fat_share * extra / 9)
+    if "carbs_g" in free:
+        out["carbs_g"] = _r(out["carbs_g"] + (1 - fat_share) * extra / 4)
+    scaled = {
+        "fiber_g": FIBER_G_PER_1000_KCAL * extra / 1000,
+        "sugar_g": SUGAR_MAX_KCAL_SHARE * extra / 4,
+    }
+    for key, more in scaled.items():
+        if key not in overridden and out.get(key) is not None:
+            out[key] = _r(out[key] + more)
+    return out
+
+
+def add_workouts(
+    s: Session, tz: ZoneInfo, plan: TargetPlan, day: date, workouts: list[Workout] | None = None
+) -> TargetPlan:
+    """`plan` (base targets) plus food day `day`'s share of its workout calories."""
+    plan = replace(plan, base_values=dict(plan.values))
+    if plan.eat_back_pct is None:
+        return plan
+    if workouts is None:
+        workouts = workouts_by_food_day(s, tz, day, day).get(day, [])
+    extra = workout_kcal(plan.eat_back_pct, workouts)
+    plan = replace(plan, workouts=workouts, workout_kcal=extra)
+    if extra and plan.values.get("kcal") is not None:
+        plan.values = _with_extra_kcal(plan.base_values, extra, plan.overridden)
     return plan
 
 
@@ -216,6 +290,8 @@ def _from_row(row: DailyTarget) -> TargetPlan:
         floor_kcal=d.get("floor_kcal"),
         flags=d.get("flags") or [],
         frozen=True,
+        eat_back_pct=d.get("eat_back_pct"),
+        workout_avg_kcal=d.get("workout_avg_kcal"),
     )
 
 
@@ -225,10 +301,11 @@ def day_targets(
     """Targets for food day `day`: frozen ones if recorded, else computed from current data.
 
     Today's are recorded the first time they're computed (when every value is known).
+    Either way the day's workouts are added on top, from whatever has synced so far.
     """
     row = s.get(DailyTarget, day)
     if row is not None:
-        return _from_row(row)
+        return add_workouts(s, tz, _from_row(row), day)
     snap = snap or build_snapshot(s, tz, now)
     plan = plan_from_snapshot(s, snap)
     if day == snap.today and plan.complete:
@@ -243,7 +320,7 @@ def day_targets(
         )
         s.flush()
         plan.frozen = True
-    return plan
+    return add_workouts(s, tz, plan, day)
 
 
 def refreeze_today(tz: ZoneInfo, now: datetime) -> None:
@@ -254,11 +331,15 @@ def refreeze_today(tz: ZoneInfo, now: datetime) -> None:
             s.delete(row)
 
 
-def frozen_targets(s: Session, start: date, end: date) -> dict[date, float]:
-    """Recorded calorie targets by food day, for charts."""
+def frozen_targets(s: Session, tz: ZoneInfo, start: date, end: date) -> dict[date, float]:
+    """Recorded calorie targets by food day, with each day's workouts added, for charts."""
     rows = s.execute(
-        select(DailyTarget.food_day, DailyTarget.kcal).where(
+        select(DailyTarget.food_day, DailyTarget.kcal, DailyTarget.details).where(
             DailyTarget.food_day >= start, DailyTarget.food_day <= end
         )
     ).all()
-    return dict(rows)
+    workouts = workouts_by_food_day(s, tz, start, end) if rows else {}
+    return {
+        d: kcal + workout_kcal((details or {}).get("eat_back_pct"), workouts.get(d, []))
+        for d, kcal, details in rows
+    }

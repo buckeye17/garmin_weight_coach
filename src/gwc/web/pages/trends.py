@@ -280,7 +280,7 @@ def render(range_key, scheme):
         today = current_food_day(s, zone, at)
         start = _start(s, today, range_key or "30")
         snap = build_snapshot(s, zone, at, history_days=(today - start).days)
-        targets = frozen_targets(s, start, snap.today)
+        targets = frozen_targets(s, zone, start, snap.today)
         sleep = _sleep_fig(s, start, snap.today, scheme)
         activities = _activities(s, start)
     figs = [

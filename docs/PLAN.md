@@ -204,8 +204,10 @@ Instead of a flat 3,500 kcal/lb, the fat vs. lean split of loss follows Forbes' 
 | **Garmin** | mean Garmin total kcal (resting + active) over the last 7 full food days | immediately |
 | **Adaptive (trend-based)** | mean logged intake − ρ × weight slope over a trailing window (default 21 days; needs weigh-ins spanning ≥ 14 days and ≥ 10 complete food days). The slope is a least-squares fit to the daily weigh-ins, not the EWMA trend's change, which lags ~10 days | after ~2–3 weeks of food logging; shows "calibrating" until then |
 
+Both include whatever workouts you did. Each estimate also reports the mean **net workout kcal** per day over its own days (Garmin activity kcal minus the resting burn for the activity's duration, at the rate of finished days, since Garmin accrues resting kcal through the day), and a **base** burn without it, which targets start from (§7.5).
+
 ### 7.4 Projection (28 days)
-- Scenarios: **at your target** (today's calorie target with the burn estimate that sets targets; works from day one), and **as eaten** with each available TDEE method (mean intake over the complete days among the last 7 food days; shown once ≥ 3 are complete).
+- Scenarios: **at your target** (a typical day's calorie target, meaning the base target plus the eat-back share of the average workout, with the burn estimate that sets targets; works from day one), and **as eaten** with each available TDEE method (mean intake over the complete days among the last 7 food days; shown once ≥ 3 are complete).
 - Simulated day by day. Expenditure falls as weight drops (default −22 kcal/day per kg lost, configurable), and ρ is updated as fat mass changes.
 - Uncertainty band (10th–90th percentile) via Monte Carlo: bootstrap the daily intakes and sample TDEE from its estimate's standard error (Garmin's includes a 5 % systematic term).
 - Chart: trend weight history + both projections with bands, goal line, and data-completeness indicators ("6/7 days logged", provisional days).
@@ -214,7 +216,8 @@ Instead of a flat 3,500 kcal/lb, the fat vs. lean split of loss follows Forbes' 
 ### 7.5 Targets
 From goal loss per month (in the display unit):
 - Daily deficit = goal × ρ / 30.44 days.
-- Calorie target = TDEE − deficit. Settings picks the TDEE: **Auto** (adaptive once calibrated, else Garmin), Garmin, or Trend-based.
+- Calorie target = base TDEE (without workouts, §7.3) − deficit, plus that food day's workouts (below). Settings picks the TDEE: **Auto** (adaptive once calibrated, else Garmin), Garmin, or Trend-based.
+- **Same-day workouts:** each food day adds a share (default 75 %, set in Settings; 0 turns workout credit off) of the net kcal of the Garmin activities that started in it, live, so a manual sync after a workout raises that day's target. It adds on top of a manual calorie override too. The extra kcal go 25/75 to fat/carbs (all to whichever isn't overridden), with fiber and sugar scaled along. Because the base leaves workouts out, a workout is credited once, on its own day, not again through next week's burn average. Rest days are correspondingly a little lower than the all-in burn. Only recorded activities count; extra walking stays in the base.
 - Guardrails: warn and cap if the goal exceeds ~1 % of body weight per week (configurable); calorie target never below Garmin's resting kcal (hard floor — the app shows the slower rate this allows).
 - Protein: 2.4 g per kg of lean mass (from the scale; ≈ 1.1 g/lb).
 - Fat: max(25 % of kcal, 0.5 g/kg body weight).
@@ -223,7 +226,7 @@ From goal loss per month (in the display unit):
 - Sugar: ≤ 10 % of kcal (total sugar is tracked, so this is a soft guide).
 - Sodium: ≤ 2,300 mg.
 - Every target can be overridden manually; overridden calories, protein or fat feed into the macros derived from them.
-- A food day's targets are frozen into `daily_target` the first time they're computed, so later syncs don't move them. Saving the goal, overrides or analysis settings re-computes today; earlier days keep theirs.
+- A food day's base targets are frozen into `daily_target` the first time they're computed, so later syncs don't move them; the day's workouts are added on read. Saving the goal, overrides or analysis settings re-computes today; earlier days keep theirs. Days frozen before the workout adjustment existed (no `eat_back_pct` in their details) get no workout credit.
 
 ---
 

@@ -77,6 +77,8 @@ def get_overview(_args: dict[str, Any]) -> dict[str, Any]:
             "std_error": _r(e.se, 0),
             "ready": e.ready,
             "note": e.note,
+            "workouts_kcal_per_day": _r(e.exercise_kcal, 0),
+            "without_workouts_kcal_per_day": _r(e.base_kcal, 0),
         }
         for e in (snap.garmin, snap.adaptive)
     }
@@ -219,6 +221,11 @@ def get_targets(args: dict[str, Any]) -> dict[str, Any]:
         "overridden": plan.overridden,
         "burn_method": plan.tdee_method,
         "burn_kcal": _r(plan.tdee_kcal, 0),
+        "burn_excludes_workouts": plan.eat_back_pct is not None,
+        "targets_before_workouts": {k: _r(v, 0) for k, v in plan.base_values.items()},
+        "workout_kcal_added": _r(plan.workout_kcal, 0),
+        "workout_eat_back_pct": plan.eat_back_pct,
+        "workouts": [w.as_dict() for w in plan.workouts],
         "deficit_kcal": _r(plan.deficit_kcal, 0),
         "goal_loss_per_month": _w(plan.goal_kg_per_month),
         "achievable_loss_per_month": _w(plan.effective_kg_per_month),
@@ -302,7 +309,7 @@ def get_projection(_args: dict[str, Any]) -> dict[str, Any]:
     with session_scope() as s:
         snap = build_snapshot(s, tz, now)
         plan = day_targets(s, tz, now, snap.today, snap=snap)
-    projections = scenarios(snap, plan.values.get("kcal"))
+    projections = scenarios(snap, plan.typical_kcal)
     return {
         "weight_unit": weight_unit(),
         "start_trend_weight": _w(snap.weight_kg),
@@ -463,7 +470,8 @@ def data_tools() -> list[ToolSpec]:
         ToolSpec(
             "get_targets",
             "Nutrient targets for a food day: final values, the suggestions, which are manual "
-            "overrides, the burn and deficit behind calories, and guardrail flags.",
+            "overrides, the burn and deficit behind calories, guardrail flags, and the "
+            "calories added for that day's Garmin workouts.",
             day_schema,
             get_targets,
             lambda _a: "Checking your targets…",

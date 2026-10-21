@@ -2,7 +2,7 @@
 
 Personal web app that syncs Garmin scale/watch data, tracks daily nutrition against suggested targets, projects weight change over the next 4 weeks, and includes a Claude coach. It runs on one Windows PC and is reached from a desktop browser or a phone over Tailscale. See [docs/PLAN.md](docs/PLAN.md) for the full design.
 
-- **Today**: progress bars for calories, protein, carbs, fat, fiber, sugar and sodium for the current food day (which ends when you fall asleep, per Garmin).
+- **Today**: progress bars for calories, protein, carbs, fat, fiber, sugar and sodium for the current food day (which ends when you fall asleep, per Garmin). Workouts raise that day's targets once they sync (see below).
 - **Add food**: USDA search, your own foods and recipes, or describe a meal in plain English and let Claude itemize it for review.
 - **Trends** and **Projection**: smoothed weight trend, Garmin vs. trend-based burn, and a 4-week projection with an uncertainty band.
 - **Coach**: chat about your data, plus an automatic weekly summary.
@@ -72,6 +72,10 @@ The app listens only on `127.0.0.1`. [Tailscale Serve](https://tailscale.com/kb/
 Check it with `tailscale serve status`, and turn it off with `tailscale serve --https=443 off` (or `tailscale serve reset`). Don't use `tailscale funnel`, which makes the app public.
 
 The layout is tuned for the OnePlus Open: folded and unfolded both get bottom navigation and full-width pages; the sidebar appears from 992 px wide.
+
+## Workouts and targets
+
+Calorie targets start from your burn **without** workouts. Each Garmin activity recorded during a food day then adds 75% of its calories above resting to that day's target, with the extra going mostly to carbs. The percentage is set in **Settings → Goal and targets**. To see a workout's credit right away, let the watch upload to Garmin Connect, then click **Sync now** in Settings. Rest days are a little lower than your all-in Garmin burn, and a workout is credited once, on its own day, rather than again through next week's average.
 
 ## Backups
 

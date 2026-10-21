@@ -18,8 +18,14 @@ def fmt_kcal(value: float | None) -> str:
 
 
 def plan_summary(plan: t.TargetPlan, unit: WeightUnit) -> str:
-    """One line: where today's calorie target came from."""
-    kcal = plan.values.get("kcal")
+    """Where a day's calorie target came from, including its workouts."""
+    base = _base_summary(plan, unit)
+    extra = workout_summary(plan)
+    return f"{base} {extra}" if extra else base
+
+
+def _base_summary(plan: t.TargetPlan, unit: WeightUnit) -> str:
+    kcal = (plan.base_values or plan.values).get("kcal")
     if kcal is None:
         return "No calorie target yet: it needs Garmin burn data or a manual value."
     if "kcal" in plan.overridden:
@@ -27,12 +33,31 @@ def plan_summary(plan: t.TargetPlan, unit: WeightUnit) -> str:
     if plan.tdee_kcal is None or plan.deficit_kcal is None:
         return f"{kcal:,.0f} kcal."
     source = METHOD_LABELS.get(plan.tdee_method or "", "burn")
+    if plan.eat_back_pct is not None and plan.workout_avg_kcal:
+        source += " without workouts"
     if t.NO_GOAL in plan.flags:
         return f"{kcal:,.0f} kcal: maintenance at your {source} (no goal set)."
     sign = "−" if plan.deficit_kcal >= 0 else "+"
     return (
         f"{kcal:,.0f} kcal = {source} {plan.tdee_kcal:,.0f} {sign} "
         f"{abs(plan.deficit_kcal):,.0f}, about {fmt_rate(plan.effective_kg_per_month, unit)}."
+    )
+
+
+def workout_summary(plan: t.TargetPlan) -> str:
+    """E.g. "+380 kcal for Run (60 min): 75% of 504 kcal above resting. Total 3,540 kcal." """
+    if not plan.workout_kcal or plan.values.get("kcal") is None:
+        return ""
+    ws = plan.workouts
+    if len(ws) == 1:
+        mins = f" ({ws[0].duration_s / 60:,.0f} min)" if ws[0].duration_s else ""
+        what = f"{ws[0].name}{mins}"
+    else:
+        what = f"{len(ws)} workouts"
+    net = sum(w.net_kcal for w in ws)
+    return (
+        f"+{plan.workout_kcal:,.0f} kcal for {what}: {plan.eat_back_pct:,.0f}% of "
+        f"{net:,.0f} kcal above resting. Total {plan.values['kcal']:,.0f} kcal."
     )
 
 
@@ -57,4 +82,10 @@ def flag_messages(plan: t.TargetPlan, unit: WeightUnit) -> list[str]:
 def tdee_line(est: TdeeEstimate) -> str:
     if not est.ready or est.kcal is None:
         return est.note
-    return f"{est.kcal:,.0f} ± {est.se or 0:,.0f} kcal/day. {est.note}"
+    line = f"{est.kcal:,.0f} ± {est.se or 0:,.0f} kcal/day. {est.note}"
+    if est.exercise_kcal:
+        line += (
+            f" Workouts average {est.exercise_kcal:,.0f} kcal/day of that; targets start "
+            f"from {est.base_kcal:,.0f} and add each day's own workouts."
+        )
+    return line

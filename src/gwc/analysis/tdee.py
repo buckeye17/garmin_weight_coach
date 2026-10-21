@@ -6,6 +6,10 @@
   moved: mean intake on complete food days − ρ × weight slope. The slope is a
   least-squares fit to the daily weigh-ins in the window rather than the
   change in the smoothed trend, which lags real changes by ~10 days.
+
+Both include whatever workouts you did. `exercise_kcal` is the average net
+workout burn over the same days, and `base_kcal` is the estimate without it:
+targets start from the base and add each day's own workouts (exercise.py).
 """
 
 import math
@@ -36,6 +40,14 @@ class TdeeEstimate:
     resting_kcal: float | None = None  # Garmin only: mean resting (BMR) kcal
     intake_kcal: float | None = None  # adaptive only: mean intake on complete days
     slope_kg_per_week: float | None = None  # adaptive only
+    exercise_kcal: float | None = None  # mean net workout kcal/day over the same days
+
+    @property
+    def base_kcal(self) -> float | None:
+        """Burn without workouts."""
+        if self.kcal is None:
+            return None
+        return self.kcal - (self.exercise_kcal or 0.0)
 
     @property
     def label(self) -> str:
@@ -63,6 +75,7 @@ def garmin_tdee(ended: list[DayRecord], n: int = GARMIN_DAYS) -> TdeeEstimate:
         f"Mean of Garmin's total burn over {len(days)} day{'s' * (len(days) != 1)}.",
         days_used=len(days),
         resting_kcal=statistics.fmean(resting) if resting else None,
+        exercise_kcal=statistics.fmean(d.garmin_exercise for d in days),
     )
 
 
@@ -122,6 +135,7 @@ def adaptive_tdee(
         days_used=len(complete),
         intake_kcal=intake,
         slope_kg_per_week=slope * 7,
+        exercise_kcal=statistics.fmean(d.garmin_exercise for d in days),
     )
 
 
