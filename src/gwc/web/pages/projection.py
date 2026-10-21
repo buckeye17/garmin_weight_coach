@@ -7,7 +7,7 @@ from dash import Input, Output, callback
 
 from gwc.analysis import snapshot as snap_mod
 from gwc.analysis.energy import DAYS_PER_MONTH
-from gwc.analysis.projection import Projection, project
+from gwc.analysis.projection import Projection, scenarios
 from gwc.analysis.snapshot import Snapshot, build_snapshot
 from gwc.analysis.targets import day_targets, goal_kg_per_month
 from gwc.analysis.units import WeightUnit, fmt_weight, kg_to, weight_unit
@@ -89,45 +89,6 @@ def layout(**_kwargs):
         ],
         gap="md",
     )
-
-
-def scenarios(snap: Snapshot, target_kcal: float | None) -> list[Projection]:
-    """At-target first (works from day one), then logged intake with each burn estimate."""
-    if snap.weight_kg is None or snap.fat_kg is None:
-        return []
-    common = {
-        "start_day": snap.today,
-        "start_kg": snap.weight_kg,
-        "fat_kg": snap.fat_kg,
-        "kcal_per_kg": snap.kcal_per_kg_lost,
-    }
-    out = []
-    if target_kcal and snap.chosen.ready:
-        out.append(
-            project(
-                key="target",
-                label="At your target",
-                tdee_kcal=snap.chosen.kcal,
-                tdee_se=snap.chosen.se,
-                fixed_intake=target_kcal,
-                **common,
-            )
-        )
-    intakes = snap.intakes7
-    if len(intakes) >= snap_mod.MIN_LOGGED_FOR_PROJECTION:
-        for est in (snap.garmin, snap.adaptive):
-            if est.ready:
-                out.append(
-                    project(
-                        key=est.method,
-                        label=f"As eaten · {est.label} burn",
-                        tdee_kcal=est.kcal,
-                        tdee_se=est.se,
-                        intakes=intakes,
-                        **common,
-                    )
-                )
-    return out
 
 
 SLOTS = {"target": 2, "garmin": 3, "adaptive": 4}

@@ -10,6 +10,7 @@ from gwc.db.session import session_scope
 from gwc.nutrition import foods
 from gwc.nutrition.service import get_usda
 from gwc.nutrition.usda import UsdaError, UsdaHit
+from gwc.web.components.ai_log import ai_panel
 from gwc.web.components.common import icon, triggered_click
 from gwc.web.components.log_modal import log_modal
 
@@ -88,10 +89,7 @@ def layout(**_kwargs):
                             ),
                             dmc.TabsTab("My foods", value="mine", leftSection=icon("tabler:star")),
                             dmc.TabsTab(
-                                "Describe",
-                                value="ai",
-                                leftSection=icon("tabler:sparkles"),
-                                disabled=True,
+                                "Describe", value="ai", leftSection=icon("tabler:sparkles")
                             ),
                         ],
                         grow=True,
@@ -139,19 +137,11 @@ def layout(**_kwargs):
                         ),
                         value="mine",
                     ),
-                    dmc.TabsPanel(
-                        dmc.Text(
-                            "Describe a meal in plain English and Claude will itemize it — "
-                            "coming in milestone 5.",
-                            size="sm",
-                            c="dimmed",
-                            pt="sm",
-                        ),
-                        value="ai",
-                    ),
+                    dmc.TabsPanel(ai_panel(), value="ai"),
                 ],
                 id="add-tabs",
                 value="usda",
+                persistence=True,
             ),
             dmc.Anchor("Create a custom food or recipe →", href="/foods", size="sm"),
             dcc.Store(id="usda-hits"),

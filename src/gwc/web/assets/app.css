@@ -2,3 +2,41 @@
 input, select, textarea {
   font-size: 16px;
 }
+
+/* Coach replies rendered from Markdown. */
+.coach-md {
+  font-size: var(--mantine-font-size-sm);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.coach-md p,
+.coach-md ul,
+.coach-md ol {
+  margin: 0 0 0.5em;
+}
+.coach-md ul,
+.coach-md ol {
+  padding-left: 1.25em;
+}
+.coach-md h1,
+.coach-md h2,
+.coach-md h3 {
+  font-size: 1em;
+  margin: 0.75em 0 0.25em;
+}
+.coach-md > :first-child {
+  margin-top: 0;
+}
+.coach-md > :last-child {
+  margin-bottom: 0;
+}
+.coach-md table {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+.coach-md th,
+.coach-md td {
+  padding: 2px 8px;
+  border-bottom: 1px solid var(--mantine-color-default-border);
+}

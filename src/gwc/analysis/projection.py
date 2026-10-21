@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 
 from gwc.analysis.energy import fat_fraction, rho
+from gwc.analysis.snapshot import MIN_LOGGED_FOR_PROJECTION, Snapshot
 
 HORIZON_DAYS = 28
 N_SIMS = 400
@@ -107,3 +108,42 @@ def project(
         p10=p10,
         p90=p90,
     )
+
+
+def scenarios(snap: Snapshot, target_kcal: float | None) -> list[Projection]:
+    """At-target first (works from day one), then logged intake with each burn estimate."""
+    if snap.weight_kg is None or snap.fat_kg is None:
+        return []
+    common = {
+        "start_day": snap.today,
+        "start_kg": snap.weight_kg,
+        "fat_kg": snap.fat_kg,
+        "kcal_per_kg": snap.kcal_per_kg_lost,
+    }
+    out = []
+    if target_kcal and snap.chosen.ready:
+        out.append(
+            project(
+                key="target",
+                label="At your target",
+                tdee_kcal=snap.chosen.kcal,
+                tdee_se=snap.chosen.se,
+                fixed_intake=target_kcal,
+                **common,
+            )
+        )
+    intakes = snap.intakes7
+    if len(intakes) >= MIN_LOGGED_FOR_PROJECTION:
+        for est in (snap.garmin, snap.adaptive):
+            if est.ready:
+                out.append(
+                    project(
+                        key=est.method,
+                        label=f"As eaten · {est.label} burn",
+                        tdee_kcal=est.kcal,
+                        tdee_se=est.se,
+                        intakes=intakes,
+                        **common,
+                    )
+                )
+    return out

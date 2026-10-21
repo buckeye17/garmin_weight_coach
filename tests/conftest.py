@@ -1,8 +1,10 @@
 import pytest
 
 from gwc import config
+from gwc.coach import jobs, llm
 from gwc.db import session
 from gwc.garmin import service
+from gwc.nutrition import service as nutrition_service
 
 
 def _clear_caches():
@@ -16,6 +18,9 @@ def _clear_caches():
         service.get_runner,
     ):
         factory.cache_clear()
+    jobs.get_jobs.cache_clear()
+    nutrition_service.get_usda.cache_clear()
+    llm.set_backend_override(None)
 
 
 @pytest.fixture(autouse=True)

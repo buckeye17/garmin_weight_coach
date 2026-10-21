@@ -23,6 +23,7 @@ from gwc.garmin.status import GarminOverview, get_overview
 from gwc.nutrition.nutrients import NUTRIENTS
 from gwc.prefs import get_pref, set_pref
 from gwc.web.components.analysis_text import flag_messages, plan_summary
+from gwc.web.components.coach_settings import coach_card
 from gwc.web.components.common import tz
 from gwc.web.format import fmt_day, fmt_duration, fmt_when
 
@@ -372,19 +373,11 @@ def layout(**_kwargs):
                 spacing="md",
             ),
             dmc.SimpleGrid(
-                [_prefs_card(), _targets_card()],
+                [dmc.Stack([_prefs_card(), coach_card()], gap="md"), _targets_card()],
                 cols={"base": 1, "md": 2},
                 spacing="md",
             ),
             _runs_card(),
-            dmc.Card(
-                dmc.Text(
-                    "The LLM backend arrives with milestone 5.",
-                    size="sm",
-                    c="dimmed",
-                ),
-                withBorder=True,
-            ),
             dcc.Store(id="prefs-load", data=0),
             dcc.Store(id="prefs-saved", data=0),
             _mfa_modal(),

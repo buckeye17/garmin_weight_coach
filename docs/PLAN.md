@@ -232,18 +232,21 @@ From goal loss per month (in the display unit):
 ### 8.1 Backends (`coach/llm.py`)
 | Backend | Auth | Notes |
 |---|---|---|
-| `subscription` (default) | Claude Code login on this machine (Max 5x) via `claude-agent-sdk` | `ANTHROPIC_API_KEY` is removed from the SDK subprocess environment so usage can't silently bill an API key. Built-in file/shell/web tools are disabled; only the app's tools are allowed. |
-| `api` | `ANTHROPIC_API_KEY` via `anthropic` SDK | Model `claude-opus-5-5`, adaptive thinking, streaming, refusal fallbacks. |
+| `subscription` (default) | Claude Code login on this machine (Max 5x) via `claude-agent-sdk`, which bundles the CLI | `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` are blanked in the SDK subprocess environment so usage can't silently bill a key. Built-in tools are removed (`tools=[]`), user/project settings aren't loaded, and only the app's tools (an in-process MCP server) are allowed. Tool search is off: the tools load upfront. |
+| `api` | `ANTHROPIC_API_KEY` via `anthropic` SDK | Streaming manual tool loop; server-side refusal fallbacks (`fallbacks: "default"`) on models that support them. |
 
-Model is configurable per feature (coach chat, food parsing, weekly summary); default `claude-opus-5-5`.
+Settings → Coach picks the backend and, per feature (coach chat, food logging, weekly summary), a model — an alias (`opus`, `sonnet`, `haiku`, `fable`; aliases follow the latest version) or a full model ID — and an effort level. Defaults: `opus`; effort medium / medium / high. An optional fallback model applies to the subscription backend. Chat history is flattened into one prompt for the subscription backend and sent as messages to the API.
 
-### 8.2 Tools exposed to Claude (read-only)
-`get_weight_trend`, `get_body_comp`, `get_daily_nutrition`, `get_targets`, `get_garmin_daily`, `get_sleep`, `get_activities`, `get_projection`, plus `search_usda` / `search_my_foods` for food parsing. Claude never writes to the database directly; proposed food entries go through the review table.
+LLM calls run as background jobs (`coach/jobs.py`); pages poll for streamed text, tool activity and the result, so a long turn never blocks a request.
+
+### 8.2 Tools exposed to Claude (read-only, `coach/tools.py`)
+`get_overview`, `get_weight_trend`, `get_body_comp`, `get_daily_nutrition`, `get_food_entries`, `get_targets`, `get_garmin_daily`, `get_sleep`, `get_activities`, `get_projection`, plus `search_my_foods` / `search_usda` for food parsing. Weights come back in the display unit. Claude never writes to the database; proposed food entries go through the review table.
 
 ### 8.3 Features
-- **Coach chat page** with persisted conversations.
-- **Weekly summary:** generated after the Monday 09:01 sync (configurable) and on demand — intake vs. targets, trend, projection, sleep/activity patterns, one or two concrete suggestions. Stored in `coach_summary`.
-- Health and food data sent to Claude leaves this machine (Anthropic); this is noted in Settings.
+- **Natural-language logging** (Add food → Describe): structured output (a JSON schema) lists items, each tied to one of the user's foods, a USDA result Claude actually looked up, or — only when nothing fits — Claude's own estimate (flagged). Nutrients are computed from the matched record. The review shows each item with editable grams and an include toggle; nothing is saved until confirmed. Entries are logged with source `ai` and the original description as a note.
+- **Coach chat page** with persisted conversations, suggested questions, and streamed replies rendered as Markdown.
+- **Weekly summary:** checked daily 10 minutes after the sync time and on startup; on the configured weekday (default Monday) the previous Monday–Sunday week is summarized if it hasn't been. Also on demand. Stored in `coach_summary`.
+- Health and food data sent to Claude leaves this machine (Anthropic); this is noted in Settings and on the Coach page.
 
 ---
 
