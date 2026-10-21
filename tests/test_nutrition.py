@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+from fractions import Fraction
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -279,7 +280,7 @@ def test_scale_entry(db):
         assert (two.grams, two.kcal, two.unit_label) == (50, 71.5, "1 large")
         assert log.entry_unit(s, two) == (1, unit)
         log.scale_entry(s, two.id, 1.5)
-        assert two.unit_label == "1.5 × 1 large"
+        assert two.unit_label == "1 1/2 × 1 large"
 
         by_g = log.log_food(
             s, food_id=egg.id, amount=150, unit="g", eaten_at=utc(2026, 10, 20, 6, 0), tz="UTC"
@@ -299,12 +300,53 @@ def test_scale_entry(db):
         )
         s.add(meal)
         s.flush()
-        log.scale_entry(s, meal.id, 0.5)
-        assert (meal.kcal, meal.unit_label) == (450, "0.5 × 1 burrito (175 g)")
+        log.scale_entry(s, meal.id, Fraction(1, 2))
+        assert (meal.kcal, meal.unit_label) == (450, "1/2 × 1 burrito (175 g)")
         log.scale_entry(s, meal.id, 2)
         assert meal.unit_label == "1 burrito (350 g)"
+        log.scale_entry(s, meal.id, log.parse_count("1/3"))
+        assert meal.kcal == 300
+        assert meal.unit_label == "1/3 × 1 burrito (117 g)"
+        log.scale_entry(s, meal.id, log.parse_count("3/8"))
+        assert meal.unit_label == "1/8 × 1 burrito (44 g)"
+        log.scale_entry(s, meal.id, 24)
+        assert (meal.kcal, meal.unit_label) == (pytest.approx(2700), "3 × 1 burrito (1050 g)")
         with pytest.raises(ValueError):
             log.scale_entry(s, meal.id, 0)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("1/8", Fraction(1, 8)),
+        (" 1 / 3 ", Fraction(1, 3)),
+        ("1 1/2", Fraction(3, 2)),
+        ("1.5", Fraction(3, 2)),
+        (".4", Fraction(2, 5)),
+        ("0,5", Fraction(1, 2)),
+        ("⅔", Fraction(2, 3)),
+        ("1½", Fraction(3, 2)),
+        ("2x", Fraction(2)),
+        ("×3", Fraction(3)),
+        ("25%", Fraction(1, 4)),
+    ],
+)
+def test_parse_count(text, expected):
+    assert log.parse_count(text) == expected
+
+
+@pytest.mark.parametrize("text", ["", "half", "1/0", "-1", "1/2/3"])
+def test_parse_count_rejects(text):
+    with pytest.raises(ValueError):
+        log.parse_count(text)
+
+
+@pytest.mark.parametrize(
+    ("amount", "expected"),
+    [(1 / 8, "1/8"), (2 / 3, "2/3"), (1.5, "1 1/2"), (2, "2"), (1 / 24, "1/24"), (0.37, "0.37")],
+)
+def test_fmt_count(amount, expected):
+    assert log.fmt_count(amount) == expected
 
 
 def test_entries_for_day_uses_boundaries_and_overrides(db):

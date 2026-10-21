@@ -2,6 +2,7 @@
 
 import re
 from datetime import date, datetime
+from fractions import Fraction
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
@@ -19,11 +20,45 @@ def _apply(entry: FoodLog, totals: dict[str, float]) -> None:
         setattr(entry, key, round(totals[key], 3))
 
 
+_COUNT = r"\d+ \d+/\d+|\d+/\d+|\d*\.?\d+"  # '1 1/2', '1/8', '0.75'
+_UNICODE_FRACTIONS = {"¼": "1/4", "½": "1/2", "¾": "3/4", "⅓": "1/3", "⅔": "2/3", "⅛": "1/8"}
+
+
+def parse_count(text: str) -> Fraction:
+    """'1/8', '1 1/2', '1.5', '.75', '½', '2x' or '50%' as an exact fraction."""
+    s = text.strip().lower().replace("×", "x").replace(",", ".")
+    for char, frac in _UNICODE_FRACTIONS.items():
+        s = re.sub(rf"(?<=\d)\s*{char}", f" {frac}", s).replace(char, frac)
+    s = re.sub(r"^x\s*|\s*x$", "", s)
+    percent = s.endswith("%")
+    s = re.sub(r"\s+", " ", s.removesuffix("%").strip())
+    s = re.sub(r"\s*/\s*", "/", s)
+    if not re.fullmatch(_COUNT, s):
+        raise ValueError(f"Can't read {text.strip()!r} as a number; try 1/8, 1/3 or 1.5")
+    whole, _, frac = s.rpartition(" ")
+    try:
+        value = Fraction(whole or 0) + Fraction(frac)
+    except ZeroDivisionError:
+        raise ValueError("Can't divide by zero") from None
+    return value / 100 if percent else value
+
+
+def fmt_count(amount: float) -> str:
+    """Counts as simple fractions where they are one: '1/8', '2/3', '1 1/2', else '0.37'."""
+    frac = Fraction(amount).limit_denominator(64)
+    if abs(frac - Fraction(amount)) > 1e-4:
+        return f"{round(amount, 2):g}"
+    whole, rest = divmod(frac, 1)
+    if not rest:
+        return str(whole)
+    return f"{whole} {rest}" if whole else str(rest)
+
+
 def unit_label(amount: float, label: str) -> str:
-    """'150 g', '2.5 oz', '1 large', '2 × 1 large'."""
+    """'150 g', '2.5 oz', '1 large', '2 × 1 large', '1/8 × 1 pizza'."""
     if label in ("g", "oz"):
         return f"{amount:g} {label}"
-    return label if amount == 1 else f"{amount:g} × {label}"
+    return label if amount == 1 else f"{fmt_count(amount)} × {label}"
 
 
 def log_food(
@@ -96,32 +131,33 @@ def update_entry(
     return entry
 
 
-def _scaled_label(label: str, factor: float, grams: float) -> str:
-    """Rescale a unit label: '150 g' -> '75 g', '1 burrito (350 g)' -> '0.5 × 1 burrito (175 g)'."""
+def _scaled_label(label: str, factor: Fraction, grams: float) -> str:
+    """Rescale a unit label: '150 g' -> '75 g', '1 burrito (350 g)' -> '1/2 × 1 burrito (175 g)'."""
     core, grams_suffix = re.subn(r" \([\d,.]+ g\)$", "", label)
     if m := re.fullmatch(r"([\d.]+) (g|oz)", core):
         core = unit_label(round(float(m[1]) * factor, 2), m[2])
     else:
-        count = 1.0
-        if m := re.fullmatch(r"([\d.]+) × (.+)", core):
-            count, core = float(m[1]), m[2]
-        core = unit_label(round(count * factor, 2), core)
+        count = Fraction(1)
+        if m := re.fullmatch(rf"({_COUNT}) × (.+)", core):
+            count, core = parse_count(m[1]), m[2]
+        core = unit_label(float(count * factor), core)
     return f"{core} ({grams:.0f} g)" if grams_suffix else core
 
 
-def scale_entry(s: Session, entry_id: int, factor: float) -> FoodLog:
+def scale_entry(s: Session, entry_id: int, factor: Fraction | float) -> FoodLog:
     """Multiply an entry's portion (ate half, had two) without touching its other fields."""
     entry = s.get(FoodLog, entry_id)
     if entry is None:
         raise ValueError("Entry not found")
     if factor <= 0:
         raise ValueError("Multiplier must be positive")
+    exact, factor = Fraction(factor), float(factor)
     _apply(entry, {k: getattr(entry, k) * factor for k in NUTRIENT_KEYS})
     entry.grams *= factor
     if entry.amount:
         entry.amount *= factor
     if entry.unit_label:
-        entry.unit_label = _scaled_label(entry.unit_label, factor, entry.grams)
+        entry.unit_label = _scaled_label(entry.unit_label, exact, entry.grams)
     return entry
 
 

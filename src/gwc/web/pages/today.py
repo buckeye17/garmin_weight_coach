@@ -28,44 +28,46 @@ from gwc.web.components.log_modal import log_modal
 from gwc.web.components.nutrient_bars import nutrient_bars
 from gwc.web.format import fmt_day
 
-PORTION_PRESETS = [("½", 0.5), ("1½", 1.5), ("2", 2.0)]
+PORTION_PRESETS = ["1/8", "1/4", "1/3", "1/2", "2/3", "3/4", "2"]
+_GLYPHS = {"1/8": "⅛", "1/4": "¼", "1/3": "⅓", "1/2": "½", "2/3": "⅔", "3/4": "¾"}
 
 
 def _portion_controls() -> dmc.Stack:
-    """Multiply the whole entry: ate half, or had two."""
+    """Multiply the whole entry by any fraction: 1/8 of a pizza, a third of a Blizzard, two."""
     presets = [
         dmc.Button(
-            f"× {label}",
-            id={"type": "edit-scale", "index": str(factor)},
+            _GLYPHS.get(value, f"{value}×"),
+            id={"type": "edit-scale", "index": value},
             variant="light",
-            size="compact-sm",
+            size="compact-md",
+            px=10,
         )
-        for label, factor in PORTION_PRESETS
+        for value in PORTION_PRESETS
     ]
     custom = dmc.Group(
         [
-            dmc.NumberInput(
+            dmc.TextInput(
                 id="edit-factor",
-                placeholder="× other",
-                min=0,
-                step=0.25,
-                decimalScale=2,
-                hideControls=True,
-                w=80,
-                size="xs",
-                inputProps={"inputMode": "decimal"},
+                placeholder="Other: 3/8, 1 1/2, 0.4",
+                flex=1,
+                miw=0,
+                size="sm",
+                debounce=250,
+                inputProps={"autoComplete": "off"},
             ),
-            dmc.Button("Apply", id="edit-factor-apply", variant="default", size="compact-sm"),
+            dmc.Button("Apply", id="edit-factor-apply", variant="default"),
         ],
-        gap=4,
+        gap=6,
         wrap="nowrap",
     )
     return dmc.Stack(
         [
             dmc.Text("Portion eaten", size="sm", fw=500),
-            dmc.Group([*presets, custom], gap=6),
+            dmc.Group(presets, gap=6),
+            custom,
+            dmc.Text(id="edit-factor-preview", size="xs", c="dimmed"),
         ],
-        gap=4,
+        gap=6,
     )
 
 
@@ -80,7 +82,7 @@ def _edit_modal() -> dmc.Modal:
                             label="Amount",
                             min=0,
                             step=0.25,
-                            decimalScale=2,
+                            decimalScale=3,
                             w=110,
                             inputProps={"inputMode": "decimal"},
                         ),
@@ -577,26 +579,46 @@ def save_edit(_save, _delete, entry_id, amount, unit, day, clock, day_value, not
     Output("edit-error", "children", allow_duplicate=True),
     Input({"type": "edit-scale", "index": ALL}, "n_clicks"),
     Input("edit-factor-apply", "n_clicks"),
+    Input("edit-factor", "n_submit"),
     State("edit-factor", "value"),
     State("edit-entry-id", "data"),
     State("edit-done", "data"),
     prevent_initial_call=True,
 )
-def scale_edit(_presets, _apply, custom, entry_id, done):
+def scale_edit(_presets, _apply, _submit, custom, entry_id, done):
     if not entry_id:
         raise PreventUpdate
-    if ctx.triggered_id == "edit-factor-apply":
-        factor = custom
+    if ctx.triggered_id in ("edit-factor-apply", "edit-factor"):
+        text = custom or ""
     elif clicked := triggered_click():
-        factor = clicked["index"]
+        text = clicked["index"]
     else:
         raise PreventUpdate
     try:
         with session_scope() as s:
-            log.scale_entry(s, int(entry_id), float(factor or 0))
+            log.scale_entry(s, int(entry_id), log.parse_count(text))
     except ValueError as e:
         return no_update, no_update, str(e)
     return False, (done or 0) + 1, ""
+
+
+@callback(
+    Output("edit-factor-preview", "children"),
+    Input("edit-factor", "value"),
+    State("edit-entry-id", "data"),
+)
+def preview_factor(text, entry_id):
+    if not text or not text.strip() or not entry_id:
+        return ""
+    try:
+        factor = log.parse_count(text)
+    except ValueError as e:
+        return str(e)
+    with session_scope() as s:
+        entry = s.get(FoodLog, int(entry_id))
+        if entry is None:
+            raise PreventUpdate
+        return f"× {log.fmt_count(float(factor))} → {entry.kcal * factor:,.0f} kcal"
 
 
 dash.register_page(
