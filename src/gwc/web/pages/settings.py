@@ -3,14 +3,27 @@ import dash_mantine_components as dmc
 from dash import ALL, Input, Output, State, callback, dcc, no_update
 from dash_iconify import DashIconify
 
-from gwc.analysis.targets import manual_targets, set_manual_targets
-from gwc.analysis.units import food_unit, set_units, weight_unit
+from gwc.analysis.snapshot import build_snapshot
+from gwc.analysis.targets import (
+    TDEE_METHOD_PREF,
+    day_targets,
+    goal_kg_per_month,
+    manual_targets,
+    refreeze_today,
+    set_goal,
+    set_manual_targets,
+)
+from gwc.analysis.units import food_unit, kg_to, set_units, to_kg, weight_unit
 from gwc.db.models import SyncKind, SyncStatus
+from gwc.db.session import session_scope
+from gwc.db.types import utcnow
 from gwc.garmin.client import LoginState
 from gwc.garmin.service import get_auth, get_runner, get_sync_service
 from gwc.garmin.status import GarminOverview, get_overview
 from gwc.nutrition.nutrients import NUTRIENTS
 from gwc.prefs import get_pref, set_pref
+from gwc.web.components.analysis_text import flag_messages, plan_summary
+from gwc.web.components.common import tz
 from gwc.web.format import fmt_day, fmt_duration, fmt_when
 
 FAST_POLL_MS = 2_000
@@ -251,24 +264,94 @@ def _targets_card() -> dmc.Card:
         )
         for n in NUTRIENTS
     ]
+    advanced = dmc.SimpleGrid(
+        [
+            dmc.NumberInput(
+                id="adv-weekly-pct",
+                label="Max loss per week (% of weight)",
+                min=0.1,
+                max=2,
+                step=0.1,
+                decimalScale=2,
+            ),
+            dmc.NumberInput(
+                id="adv-kcal-kg",
+                label="Burn drop per kg lost (kcal/day)",
+                min=0,
+                max=60,
+                step=1,
+            ),
+            dmc.NumberInput(
+                id="adv-alpha",
+                label="Trend smoothing (α)",
+                description="Higher reacts faster",
+                min=0.02,
+                max=0.5,
+                step=0.01,
+                decimalScale=2,
+            ),
+            dmc.NumberInput(
+                id="adv-window",
+                label="Trend-based burn window (days)",
+                min=14,
+                max=56,
+                allowDecimal=False,
+            ),
+        ],
+        cols=2,
+        spacing="xs",
+    )
     return dmc.Card(
         dmc.Stack(
             [
                 dmc.Group(
-                    [_icon("tabler:target-arrow", 22), dmc.Title("Daily targets", order=4)],
+                    [_icon("tabler:target-arrow", 22), dmc.Title("Goal and targets", order=4)],
                     gap="xs",
                 ),
+                dmc.Group(
+                    [
+                        dmc.NumberInput(
+                            id="goal-input",
+                            label="Goal loss per month",
+                            description="Negative to gain. Blank for maintenance.",
+                            step=0.5,
+                            decimalScale=1,
+                            inputProps={"inputMode": "decimal"},
+                        ),
+                        dmc.Select(
+                            id="tdee-method",
+                            label="Burn estimate",
+                            description="Auto: trend-based once calibrated",
+                            data=[
+                                {"value": "auto", "label": "Auto"},
+                                {"value": "garmin", "label": "Garmin"},
+                                {"value": "adaptive", "label": "Trend-based"},
+                            ],
+                            allowDeselect=False,
+                        ),
+                    ],
+                    align="flex-start",
+                    grow=True,
+                ),
+                dmc.Alert(id="targets-summary", color="teal", variant="light", p="xs"),
                 dmc.Text(
-                    "Leave blank for no target. Milestone 4 suggests these from your monthly "
-                    "goal; anything entered here overrides the suggestion.",
+                    "Overrides: leave blank to use the suggestion shown in each box. Changes "
+                    "apply to today; earlier days keep the targets they had.",
                     size="xs",
                     c="dimmed",
                 ),
                 dmc.SimpleGrid(inputs, cols=2, spacing="xs"),
+                dmc.Accordion(
+                    dmc.AccordionItem(
+                        [dmc.AccordionControl("Advanced"), dmc.AccordionPanel(advanced)],
+                        value="advanced",
+                    ),
+                    variant="contained",
+                ),
                 dmc.Group(
                     [
                         dmc.Text(id="targets-feedback", size="sm", c="teal"),
-                        dmc.Button("Save targets", id="targets-save", size="xs"),
+                        dmc.Button("Save goal and targets", id="targets-save", size="xs"),
                     ],
                     justify="space-between",
                 ),
@@ -296,14 +379,14 @@ def layout(**_kwargs):
             _runs_card(),
             dmc.Card(
                 dmc.Text(
-                    "The monthly goal, suggested targets and the LLM backend arrive with "
-                    "milestones 4–5.",
+                    "The LLM backend arrives with milestone 5.",
                     size="sm",
                     c="dimmed",
                 ),
                 withBorder=True,
             ),
             dcc.Store(id="prefs-load", data=0),
+            dcc.Store(id="prefs-saved", data=0),
             _mfa_modal(),
             dcc.Store(id="settings-refresh", data=0),
             dcc.Interval(id="settings-poll", interval=SLOW_POLL_MS),
@@ -546,6 +629,11 @@ def sync_now(_clicks, signal):
     Output("pref-food-unit", "value"),
     Output("pref-fallback-hour", "value"),
     Output({"type": "target-input", "key": ALL}, "value"),
+    Output("tdee-method", "value"),
+    Output("adv-weekly-pct", "value"),
+    Output("adv-kcal-kg", "value"),
+    Output("adv-alpha", "value"),
+    Output("adv-window", "value"),
     Input("prefs-load", "data"),
 )
 def load_prefs(_):
@@ -555,33 +643,94 @@ def load_prefs(_):
         food_unit(),
         get_pref("food_day_fallback_hour"),
         [targets.get(n.key) for n in NUTRIENTS],
+        get_pref(TDEE_METHOD_PREF),
+        get_pref("analysis.max_weekly_loss_pct"),
+        get_pref("analysis.kcal_per_kg_lost"),
+        get_pref("analysis.trend_alpha"),
+        get_pref("analysis.adaptive_window_days"),
+    )
+
+
+@callback(
+    Output("goal-input", "label"),
+    Output("goal-input", "value"),
+    Output("targets-summary", "children"),
+    Output({"type": "target-input", "key": ALL}, "placeholder"),
+    Input("prefs-load", "data"),
+    Input("prefs-saved", "data"),
+)
+def load_plan(*_):
+    """Goal in the current unit, today's targets, and what each blank box would get."""
+    unit = weight_unit()
+    zone, at = tz(), utcnow()
+    with session_scope() as s:
+        snap = build_snapshot(s, zone, at)
+        plan = day_targets(s, zone, at, snap.today, snap=snap)
+        goal = goal_kg_per_month(s)
+    summary = [dmc.Text(plan_summary(plan, unit), size="sm")] + [
+        dmc.Text(m, size="xs", c="dimmed") for m in flag_messages(plan, unit)
+    ]
+    placeholders = [
+        f"Suggested {plan.suggested[n.key]:,.0f}"
+        if plan.suggested.get(n.key) is not None
+        else "No suggestion yet"
+        for n in NUTRIENTS
+    ]
+    return (
+        f"Goal loss per month ({unit})",
+        None if goal is None else round(kg_to(goal, unit), 1),
+        summary,
+        placeholders,
     )
 
 
 @callback(
     Output("prefs-feedback", "children"),
+    Output("prefs-saved", "data", allow_duplicate=True),
     Input("prefs-save", "n_clicks"),
     State("pref-weight-unit", "value"),
     State("pref-food-unit", "value"),
     State("pref-fallback-hour", "value"),
+    State("prefs-saved", "data"),
     prevent_initial_call=True,
 )
-def save_prefs(_clicks, weight, food, hour):
+def save_prefs(_clicks, weight, food, hour, saved):
     set_units(weight or "lb", food or "g")
     if hour not in (None, ""):
         set_pref("food_day_fallback_hour", max(0, min(23, int(hour))))
-    return "Saved."
+    return "Saved.", (saved or 0) + 1
+
+
+def _clamp(value, lo: float, hi: float, default: float) -> float:
+    if value in (None, ""):
+        return default
+    return max(lo, min(hi, float(value)))
 
 
 @callback(
     Output("targets-feedback", "children"),
+    Output("prefs-saved", "data", allow_duplicate=True),
     Input("targets-save", "n_clicks"),
+    State("goal-input", "value"),
+    State("tdee-method", "value"),
     State({"type": "target-input", "key": ALL}, "value"),
+    State("adv-weekly-pct", "value"),
+    State("adv-kcal-kg", "value"),
+    State("adv-alpha", "value"),
+    State("adv-window", "value"),
+    State("prefs-saved", "data"),
     prevent_initial_call=True,
 )
-def save_targets(_clicks, values):
+def save_targets(_clicks, goal, method, values, weekly, kcal_kg, alpha, window, saved):
+    set_goal(None if goal in (None, "") else to_kg(float(goal), weight_unit()))
+    set_pref(TDEE_METHOD_PREF, method or "auto")
     set_manual_targets({n.key: v for n, v in zip(NUTRIENTS, values, strict=True)})
-    return "Saved."
+    set_pref("analysis.max_weekly_loss_pct", _clamp(weekly, 0.1, 2.0, 1.0))
+    set_pref("analysis.kcal_per_kg_lost", _clamp(kcal_kg, 0, 60, 22.0))
+    set_pref("analysis.trend_alpha", _clamp(alpha, 0.02, 0.5, 0.1))
+    set_pref("analysis.adaptive_window_days", int(_clamp(window, 14, 56, 21)))
+    refreeze_today(tz(), utcnow())
+    return "Saved. Today's targets were updated.", (saved or 0) + 1
 
 
 dash.register_page(

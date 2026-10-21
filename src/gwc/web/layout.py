@@ -2,7 +2,7 @@
 
 import dash
 import dash_mantine_components as dmc
-from dash import ALL, Input, Output, callback, dcc
+from dash import ALL, Input, Output, callback, clientside_callback, dcc
 from dash_iconify import DashIconify
 
 from gwc.web.nav import NAV_ITEMS, is_active
@@ -119,6 +119,8 @@ def build_layout() -> dmc.MantineProvider:
         dmc.AppShell(
             [
                 dcc.Location(id="url"),
+                # Which scheme Mantine is showing ("light"/"dark"), for chart colors.
+                dcc.Store(id="color-scheme"),
                 dcc.Interval(id="header-poll", interval=HEADER_POLL_MS),
                 _header(),
                 _navbar(),
@@ -144,6 +146,13 @@ def build_layout() -> dmc.MantineProvider:
         theme=THEME,
         defaultColorScheme="auto",
     )
+
+
+clientside_callback(
+    "(_path) => document.documentElement.getAttribute('data-mantine-color-scheme') || 'light'",
+    Output("color-scheme", "data"),
+    Input("url", "pathname"),
+)
 
 
 @callback(

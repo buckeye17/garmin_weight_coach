@@ -120,6 +120,38 @@ def entries_for_day(s: Session, day: date, days: FoodDays) -> list[FoodLog]:
     return list(s.scalars(q))
 
 
+def entries_by_day(s: Session, start: date, end: date, days: FoodDays) -> dict[date, list[FoodLog]]:
+    """Entries for every food day from `start` through `end`, keyed by food day."""
+    lo, hi = days.start_of(start), days.end_of(end)[0]
+    q = (
+        select(FoodLog)
+        .where(
+            or_(
+                and_(FoodLog.eaten_at >= lo, FoodLog.eaten_at < hi),
+                and_(FoodLog.food_day_override >= start, FoodLog.food_day_override <= end),
+            )
+        )
+        .order_by(FoodLog.eaten_at)
+    )
+    out: dict[date, list[FoodLog]] = {}
+    for e in s.scalars(q):
+        day = e.food_day_override or days.day_of(e.eaten_at)
+        if start <= day <= end:
+            out.setdefault(day, []).append(e)
+    return out
+
+
+def incomplete_days(s: Session, start: date, end: date) -> set[date]:
+    rows = s.scalars(
+        select(FoodDayStatus.food_day).where(
+            FoodDayStatus.is_incomplete.is_(True),
+            FoodDayStatus.food_day >= start,
+            FoodDayStatus.food_day <= end,
+        )
+    )
+    return set(rows)
+
+
 def totals(entries: list[FoodLog]) -> dict[str, float]:
     out = zero()
     for e in entries:

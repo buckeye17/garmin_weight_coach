@@ -189,7 +189,7 @@ All foods are normalized to nutrients per 100 g plus named servings. The log dia
 ## 7. Analysis
 
 ### 7.1 Weight trend
-Exponentially weighted moving average of daily weigh-ins (α = 0.1 by default, Hacker's Diet style). Multiple weigh-ins per day are averaged; missing days are carried by the trend.
+Exponentially weighted moving average of daily weigh-ins (α = 0.1 by default, Hacker's Diet style), warmed up as a running mean over the first 1/α weigh-ins so an outlier first reading doesn't skew it for weeks. Multiple weigh-ins per day are averaged; missing days are carried by the trend.
 
 ### 7.2 Energy density of weight change
 Instead of a flat 3,500 kcal/lb, the fat vs. lean split of loss follows Forbes' relation using fat mass from the scale:
@@ -202,28 +202,28 @@ Instead of a flat 3,500 kcal/lb, the fat vs. lean split of loss follows Forbes' 
 | Method | Calculation | Availability |
 |---|---|---|
 | **Garmin** | mean Garmin total kcal (resting + active) over the last 7 full food days | immediately |
-| **Adaptive (trend-based)** | mean logged intake − ρ × Δtrend / days over a trailing window (default 21 days, ≥ 14 days with ≥ 10 complete food days) | after ~2–3 weeks of food logging; shows "calibrating" until then |
+| **Adaptive (trend-based)** | mean logged intake − ρ × weight slope over a trailing window (default 21 days; needs weigh-ins spanning ≥ 14 days and ≥ 10 complete food days). The slope is a least-squares fit to the daily weigh-ins, not the EWMA trend's change, which lags ~10 days | after ~2–3 weeks of food logging; shows "calibrating" until then |
 
 ### 7.4 Projection (28 days)
-- Inputs: mean intake over the last 7 complete food days; TDEE from each method.
+- Scenarios: **at your target** (today's calorie target with the burn estimate that sets targets; works from day one), and **as eaten** with each available TDEE method (mean intake over the complete days among the last 7 food days; shown once ≥ 3 are complete).
 - Simulated day by day. Expenditure falls as weight drops (default −22 kcal/day per kg lost, configurable), and ρ is updated as fat mass changes.
-- Uncertainty band (10th–90th percentile) via Monte Carlo: bootstrap the 7 daily intakes and sample TDEE from its estimate's standard error.
+- Uncertainty band (10th–90th percentile) via Monte Carlo: bootstrap the daily intakes and sample TDEE from its estimate's standard error (Garmin's includes a 5 % systematic term).
 - Chart: trend weight history + both projections with bands, goal line, and data-completeness indicators ("6/7 days logged", provisional days).
 - Warning when < 5 of the last 7 food days are complete.
 
 ### 7.5 Targets
 From goal loss per month (in the display unit):
 - Daily deficit = goal × ρ / 30.44 days.
-- Calorie target = TDEE (adaptive if calibrated, else Garmin) − deficit.
-- Guardrails: warn and cap if the goal exceeds ~1 % of body weight per week; calorie target never below Garmin resting kcal (both configurable).
+- Calorie target = TDEE − deficit. Settings picks the TDEE: **Auto** (adaptive once calibrated, else Garmin), Garmin, or Trend-based.
+- Guardrails: warn and cap if the goal exceeds ~1 % of body weight per week (configurable); calorie target never below Garmin's resting kcal (hard floor — the app shows the slower rate this allows).
 - Protein: 2.4 g per kg of lean mass (from the scale; ≈ 1.1 g/lb).
 - Fat: max(25 % of kcal, 0.5 g/kg body weight).
 - Carbs: remaining calories.
 - Fiber: 14 g per 1,000 kcal.
 - Sugar: ≤ 10 % of kcal (total sugar is tracked, so this is a soft guide).
 - Sodium: ≤ 2,300 mg.
-- Every target can be overridden manually. Targets are recalculated after each sync and stay fixed within a food day.
-- Until this lands (milestone 4), targets are entered manually in Settings and stored as the overrides.
+- Every target can be overridden manually; overridden calories, protein or fat feed into the macros derived from them.
+- A food day's targets are frozen into `daily_target` the first time they're computed, so later syncs don't move them. Saving the goal, overrides or analysis settings re-computes today; earlier days keep theirs.
 
 ---
 
@@ -256,7 +256,7 @@ DMC `AppShell` with a sidebar on desktop and bottom navigation on phone; light/d
 | **Today** (home) | Progress bars for the 7 nutrients vs. targets, remaining kcal, entry timeline for the current food day, quick add (favorites / recents) |
 | **Add food** | Tabs: Search USDA · My foods & recipes · Describe (AI); amount + unit input (g/oz/servings); time eaten (defaults to now) |
 | **Foods** | Create/edit custom foods and recipes |
-| **Trends** | Weight (raw + trend), body composition, intake vs. Garmin burn, sleep, activities; date-range picker |
+| **Trends** | Weight (raw + trend), body fat, intake vs. Garmin burn and target, sleep, steps, activities; 30d / 90d / 1y / All range |
 | **Projection** | 4-week projection chart (§7.4), TDEE estimates, data completeness |
 | **Coach** | Chat + weekly summaries |
 | **Settings** | Units (weight lb/kg, food g/oz), goal loss per month, target overrides, food-day fallback hour, sync time, LLM backend/model, Garmin connection + 2FA, sync status and **Sync now** button with guard state |

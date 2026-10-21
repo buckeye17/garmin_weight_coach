@@ -10,6 +10,13 @@ from gwc.db.session import session_scope
 DEFAULTS: dict[str, Any] = {
     "sync_time": "09:01",
     "food_day_fallback_hour": 9,
+    # Analysis (milestone 4). Goal is stored in kg/month; None means no goal set.
+    "goal.loss_kg_per_month": None,
+    "targets.tdee_method": "auto",  # auto | garmin | adaptive
+    "analysis.trend_alpha": 0.1,
+    "analysis.kcal_per_kg_lost": 22.0,
+    "analysis.max_weekly_loss_pct": 1.0,
+    "analysis.adaptive_window_days": 21,
 }
 
 

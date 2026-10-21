@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from fakes import utc
 from gwc.analysis.food_day import FoodDays
-from gwc.analysis.targets import current_targets, set_manual_targets
+from gwc.analysis.targets import manual_targets, set_manual_targets
 from gwc.analysis.units import G_PER_OZ, fmt_weight, kg_to, to_kg
 from gwc.db.migrate import upgrade
 from gwc.db.models import Food, FoodLog, FoodSource, LogSource
@@ -379,9 +379,9 @@ def test_incomplete_flag(db):
 
 
 def test_manual_targets(db):
-    assert current_targets()["kcal"] is None
+    assert manual_targets()["kcal"] is None
     set_manual_targets({"kcal": "2200", "protein_g": 180, "bogus": 1, "fat_g": ""})
-    targets = current_targets()
+    targets = manual_targets()
     assert targets["kcal"] == 2200 and targets["protein_g"] == 180 and targets["fat_g"] is None
     assert "bogus" not in targets
 

@@ -7,10 +7,12 @@ from dash import ALL, Input, Output, State, callback, ctx, dcc, no_update
 from dash.exceptions import PreventUpdate
 
 from gwc.analysis.food_day import current_food_day, food_days_around
-from gwc.analysis.targets import current_targets
+from gwc.analysis.targets import NO_GOAL, day_targets
+from gwc.analysis.units import weight_unit
 from gwc.db.models import FoodLog
 from gwc.db.session import session_scope
 from gwc.nutrition import foods, log
+from gwc.web.components.analysis_text import flag_messages, plan_summary
 from gwc.web.components.common import (
     fmt_clock,
     from_picker,
@@ -135,16 +137,12 @@ def layout(**_kwargs):
                                     justify="space-between",
                                 ),
                                 dmc.Stack(id="day-bars", gap="sm"),
+                                dmc.Text(id="day-target-note", size="xs", c="dimmed"),
                                 dmc.Alert(
                                     id="targets-hint",
                                     color="gray",
                                     variant="light",
                                     display="none",
-                                    children=[
-                                        "No targets yet. ",
-                                        dmc.Anchor("Set them in Settings", href="/settings"),
-                                        " — suggested targets arrive in milestone 4.",
-                                    ],
                                 ),
                                 dmc.Switch(
                                     id="day-incomplete",
@@ -247,7 +245,9 @@ def change_day(_prev, _next, _today, selected):
     Output("day-sub", "children"),
     Output("day-bars", "children"),
     Output("day-remaining", "children"),
+    Output("day-target-note", "children"),
     Output("targets-hint", "display"),
+    Output("targets-hint", "children"),
     Output("day-incomplete", "checked"),
     Output("day-entries", "children"),
     Output("quick-add", "children"),
@@ -265,7 +265,8 @@ def render_day(selected, _done, _edited):
         start, (end, from_sleep) = fd.start_of(day), fd.end_of(day)
         entries = log.entries_for_day(s, day, fd)
         totals = log.totals(entries)
-        targets = current_targets()
+        plan = day_targets(s, zone, now(), day)
+        targets = plan.values
         incomplete = log.is_incomplete(s, day)
         quick = foods.favorite_foods(s)[:6]
         quick += [f for f in foods.recent_foods(s, 10) if f not in quick][: 10 - len(quick)]
@@ -302,13 +303,21 @@ def render_day(selected, _done, _edited):
     if targets.get("kcal"):
         left = targets["kcal"] - totals["kcal"]
         remaining = f"{left:,.0f} kcal left" if left >= 0 else f"{-left:,.0f} kcal over"
-    has_targets = any(v for v in targets.values())
+    unit = weight_unit()
+    hint = []
+    if NO_GOAL in plan.flags and "kcal" not in plan.overridden:
+        hint = ["No monthly goal set, so calories are for maintenance. "]
+    hint += [f"{m} " for m in flag_messages(plan, unit)]
+    if hint:
+        hint.append(dmc.Anchor("Goal and targets in Settings", href="/settings"))
     return (
         title,
         sub,
         nutrient_bars(totals, targets),
         remaining,
-        "none" if has_targets else "block",
+        plan_summary(plan, unit),
+        "block" if hint else "none",
+        hint,
         incomplete,
         entry_rows,
         quick_buttons,

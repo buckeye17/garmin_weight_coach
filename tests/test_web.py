@@ -92,3 +92,95 @@ def test_serve_warns_when_garmin_disconnected(caplog):
     with caplog.at_level(logging.WARNING, logger="gwc"):
         _warn_if_garmin_disconnected("127.0.0.1", 8060)
     assert "http://127.0.0.1:8060/settings" in caplog.text
+
+
+@pytest.fixture
+def seeded(app, isolated_settings):
+    from datetime import UTC, datetime, timedelta
+
+    from gwc.analysis.food_day import current_food_day
+    from gwc.db.migrate import upgrade
+    from gwc.db.models import Activity, BodyComp, DailySummary, FoodLog, LogSource, Sleep
+    from gwc.db.session import session_scope
+    from gwc.db.types import utcnow
+
+    upgrade()
+    tz = isolated_settings.tz
+    with session_scope() as s:
+        today = current_food_day(s, tz, utcnow())
+        for i in range(21, 0, -1):
+            d = today - timedelta(days=i)
+            noon = datetime(d.year, d.month, d.day, 12, tzinfo=tz).astimezone(UTC)
+            s.add(
+                DailySummary(
+                    calendar_date=d,
+                    total_kcal=3100,
+                    resting_kcal=2300,
+                    steps=9000,
+                    is_provisional=i == 1,
+                )
+            )
+            s.add(BodyComp(measured_at=noon, weight_kg=120 - 0.05 * (21 - i), body_fat_pct=30))
+            s.add(
+                Sleep(
+                    calendar_date=d,
+                    start_at=noon - timedelta(hours=8),
+                    end_at=noon - timedelta(hours=1),
+                    duration_s=7 * 3600,
+                )
+            )
+            if i % 3:
+                s.add(
+                    FoodLog(
+                        eaten_at=noon + timedelta(hours=2),
+                        tz=str(tz),
+                        description="x",
+                        grams=100,
+                        kcal=2600,
+                        source=LogSource.CUSTOM,
+                    )
+                )
+        s.add(
+            Activity(
+                garmin_activity_id=1,
+                activity_type="walking",
+                start_at=utcnow() - timedelta(days=2),
+                duration_s=1800,
+                kcal=200,
+            )
+        )
+
+
+def test_analysis_callbacks_render(seeded):
+    import plotly.graph_objects as go
+
+    from gwc.web.pages import projection, settings, today, trends
+
+    out = projection.render("light")
+    fig = out[9]
+    assert isinstance(fig, go.Figure)
+    names = {t.name for t in fig.data if t.name}
+    assert {"Trend", "At your target", "As eaten · Garmin burn"} <= names
+    assert out[11] and out[12]  # burn estimates, last 7 days
+
+    for key in ("30", "all"):
+        figs = trends.render(key, "dark")
+        assert all(isinstance(f, go.Figure) and f.data for f in figs[:5])
+
+    label, _goal, summary, placeholders = settings.load_plan()
+    assert label.endswith("(lb)") and summary
+    assert all(p.startswith("Suggested") for p in placeholders)
+
+    rendered = today.render_day(None, 0, 0)
+    assert "kcal" in rendered[4]  # where the calorie target came from
+    assert rendered[5] == "block"  # no goal set → maintenance hint
+
+
+def test_analysis_callbacks_render_empty(app, isolated_settings):
+    from gwc.db.migrate import upgrade
+    from gwc.web.pages import projection, trends
+
+    upgrade()
+    out = projection.render(None)
+    assert out[1] == "—" and out[10] is None
+    assert len(trends.render("90", None)) == 6
