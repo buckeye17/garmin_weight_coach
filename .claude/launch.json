@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "gwc",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "gwc", "serve"],
+      "port": 8060
+    }
+  ]
+}

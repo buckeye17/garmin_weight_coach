@@ -271,7 +271,7 @@ USDA_API_KEY=
 GWC_LLM_BACKEND=subscription      # subscription | api
 ANTHROPIC_API_KEY=                # only for the api backend
 GWC_HOST=127.0.0.1
-GWC_PORT=8050
+GWC_PORT=8060
 GWC_TZ=                           # blank = system time zone
 ```
 
@@ -281,9 +281,9 @@ User preferences (units, goal, sync time, guard limits, etc.) are stored in the 
 
 ## 11. Running
 
-- `uv run gwc serve` starts waitress on `127.0.0.1:8050` plus the scheduler.
+- `uv run gwc serve` starts waitress on `127.0.0.1:8060` plus the scheduler.
 - `scripts/install_autostart.ps1` registers a Windows Task Scheduler task that runs the app at log on.
-- Phone access: `tailscale serve --bg 8050` publishes the app at `https://<machine>.<tailnet>.ts.net` to tailnet devices only. Nothing is exposed on the LAN or internet.
+- Phone access: `tailscale serve --bg 8060` publishes the app at `https://<machine>.<tailnet>.ts.net` to tailnet devices only. Nothing is exposed on the LAN or internet.
 - `data/backups/`: the SQLite DB is copied after each successful daily sync; the last 14 copies are kept.
 
 ---

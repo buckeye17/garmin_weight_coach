@@ -1,0 +1,49 @@
+[project]
+name = "garmin-weight-coach"
+version = "0.1.0"
+description = "Personal Garmin-synced nutrition tracker and weight-loss projection web app"
+authors = [
+    { name = "buckeye17", email = "raper.chris@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.20.0",
+    "dash>=4.4.1",
+    "dash-iconify>=0.1.2",
+    "dash-mantine-components>=2.8.0",
+    "plotly>=7.1.0",
+    "pydantic-settings>=2.16.1",
+    "sqlalchemy>=2.1.5",
+    "tzdata>=2026.5",
+    "tzlocal>=5.4.4",
+    "waitress>=3.0.2",
+]
+
+[project.scripts]
+gwc = "gwc.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.9.5,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "gwc"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.17.1",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+extend-exclude = ["src/gwc/db/alembic/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

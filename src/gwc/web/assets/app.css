@@ -1,0 +1,4 @@
+/* Avoid iOS/Android zoom-on-focus and keep tap targets comfortable. */
+input, select, textarea {
+  font-size: 16px;
+}

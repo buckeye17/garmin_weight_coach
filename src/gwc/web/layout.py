@@ -1,0 +1,148 @@
+"""App chrome: header, desktop sidebar, and phone bottom navigation."""
+
+import dash
+import dash_mantine_components as dmc
+from dash import ALL, Input, Output, callback, dcc
+from dash_iconify import DashIconify
+
+from gwc.web.nav import NAV_ITEMS, is_active
+
+HEADER_HEIGHT = 56
+NAVBAR_WIDTH = 220
+BOTTOM_NAV_HEIGHT = 64
+# Mantine's "sm" breakpoint (48em). Below it the sidebar collapses and the bottom bar shows.
+MOBILE_BREAKPOINT_PX = 768
+
+THEME = {
+    "primaryColor": "teal",
+    "defaultRadius": "md",
+    "fontFamily": "Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
+}
+
+
+def _icon(name: str, size: int = 20) -> DashIconify:
+    return DashIconify(icon=name, width=size, height=size)
+
+
+def _header() -> dmc.AppShellHeader:
+    return dmc.AppShellHeader(
+        dmc.Group(
+            [
+                dmc.Group(
+                    [_icon("tabler:scale", 24), dmc.Title("Weight Coach", order=4)],
+                    gap="xs",
+                ),
+                dmc.Badge(
+                    "Garmin: not connected",
+                    id="sync-status-badge",
+                    variant="light",
+                    color="gray",
+                ),
+            ],
+            h="100%",
+            px="md",
+            justify="space-between",
+        )
+    )
+
+
+def _navbar() -> dmc.AppShellNavbar:
+    return dmc.AppShellNavbar(
+        [
+            dmc.NavLink(
+                label=item.label,
+                href=item.href,
+                leftSection=_icon(item.icon),
+                active="exact" if item.href == "/" else "partial",
+            )
+            for item in NAV_ITEMS
+        ],
+        p="xs",
+    )
+
+
+def _bottom_nav() -> dmc.Paper:
+    def tab(label: str, icon: str, href: str) -> dmc.Anchor:
+        return dmc.Anchor(
+            dmc.Stack([_icon(icon, 22), dmc.Text(label, size="xs")], gap=2, align="center"),
+            href=href,
+            id={"type": "bottom-nav", "href": href},
+            underline="never",
+            c="dimmed",
+        )
+
+    primary = [tab(i.label, i.icon, i.href) for i in NAV_ITEMS if i.mobile_primary]
+    more = dmc.Menu(
+        [
+            dmc.MenuTarget(
+                dmc.UnstyledButton(
+                    dmc.Stack(
+                        [_icon("tabler:dots", 22), dmc.Text("More", size="xs")],
+                        gap=2,
+                        align="center",
+                    ),
+                    c="dimmed",
+                )
+            ),
+            dmc.MenuDropdown(
+                [
+                    dmc.MenuItem(i.label, href=i.href, leftSection=_icon(i.icon, 18))
+                    for i in NAV_ITEMS
+                    if not i.mobile_primary
+                ]
+            ),
+        ],
+        position="top-end",
+    )
+    return dmc.Paper(
+        dmc.Group(primary + [more], justify="space-around", h="100%", px="xs"),
+        hiddenFrom="sm",
+        withBorder=True,
+        radius=0,
+        h=BOTTOM_NAV_HEIGHT,
+        pos="fixed",
+        bottom=0,
+        left=0,
+        right=0,
+        style={"zIndex": 200, "paddingBottom": "env(safe-area-inset-bottom)"},
+    )
+
+
+def build_layout() -> dmc.MantineProvider:
+    return dmc.MantineProvider(
+        dmc.AppShell(
+            [
+                dcc.Location(id="url"),
+                _header(),
+                _navbar(),
+                dmc.AppShellMain(
+                    [
+                        dmc.Container(
+                            dash.page_container, size="lg", px={"base": "xs", "sm": "md"}
+                        ),
+                        # Keeps page content clear of the fixed bottom bar on phones.
+                        dmc.Box(h=BOTTOM_NAV_HEIGHT + 16, hiddenFrom="sm"),
+                    ]
+                ),
+                _bottom_nav(),
+            ],
+            header={"height": HEADER_HEIGHT},
+            navbar={
+                "width": NAVBAR_WIDTH,
+                "breakpoint": MOBILE_BREAKPOINT_PX,
+                "collapsed": {"mobile": True},
+            },
+            padding="md",
+        ),
+        theme=THEME,
+        defaultColorScheme="auto",
+    )
+
+
+@callback(
+    Output({"type": "bottom-nav", "href": ALL}, "c"),
+    Input("url", "pathname"),
+    dash.State({"type": "bottom-nav", "href": ALL}, "id"),
+)
+def _highlight_bottom_nav(pathname: str | None, ids: list[dict]) -> list[str]:
+    return ["teal" if is_active(i["href"], pathname) else "dimmed" for i in ids]
