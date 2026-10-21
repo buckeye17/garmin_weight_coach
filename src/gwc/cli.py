@@ -34,6 +34,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
     # The debug reloader runs the app in a child process; only that one schedules syncs.
     if not args.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
         _start_scheduler()
+        _warn_if_garmin_disconnected(host, port)
 
     if args.debug:
         app.run(host=host, port=port, debug=True)
@@ -50,6 +51,18 @@ def _start_scheduler() -> None:
     from gwc.scheduler import SyncScheduler
 
     SyncScheduler(get_sync_service(), get_runner()).start()
+
+
+def _warn_if_garmin_disconnected(host: str, port: int) -> None:
+    from gwc.garmin.service import get_auth
+
+    if not get_auth().has_tokens():
+        log.warning(
+            "Garmin is not connected, so nothing will sync. Open http://%s:%s/settings "
+            "and click Connect (the app never logs in on its own).",
+            host,
+            port,
+        )
 
 
 def cmd_db_upgrade(_args: argparse.Namespace) -> None:

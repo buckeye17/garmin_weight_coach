@@ -82,3 +82,13 @@ def test_header_badge_without_garmin(app):
 
     upgrade()
     assert _update_sync_badge(None, "/") == ("Garmin: not connected", "gray")
+
+
+def test_serve_warns_when_garmin_disconnected(caplog):
+    import logging
+
+    from gwc.cli import _warn_if_garmin_disconnected
+
+    with caplog.at_level(logging.WARNING, logger="gwc"):
+        _warn_if_garmin_disconnected("127.0.0.1", 8060)
+    assert "http://127.0.0.1:8060/settings" in caplog.text
