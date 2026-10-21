@@ -10,24 +10,32 @@ from gwc.db.models import Food, FoodLog, FoodServing, FoodSource, RecipeItem
 from gwc.nutrition.nutrients import NUTRIENT_KEYS, add, per100_of, scale, zero
 from gwc.nutrition.usda import Serving, UsdaHit
 
+RECIPE_UNIT = "recipe"
+RECIPE_LABEL = "whole recipe"
+
 
 @dataclass(frozen=True)
 class UnitOption:
-    value: str  # "g", "oz", or "serving:<id>"
+    value: str  # "g", "oz", "recipe" or "serving:<id>"
     label: str
     grams: float  # grams per 1 of this unit
 
 
 def unit_options(food: Food) -> list[UnitOption]:
+    """Servings, then (for recipes) the whole batch, so 1/8 × whole recipe works, then g / oz."""
     options = [UnitOption(f"serving:{s.id}", s.label, s.grams) for s in food.servings]
+    if food.source is FoodSource.RECIPE and food.recipe_yield_g:
+        options.append(UnitOption(RECIPE_UNIT, RECIPE_LABEL, food.recipe_yield_g))
     options += [UnitOption("g", "g", 1.0), UnitOption("oz", "oz", G_PER_OZ)]
     return options
 
 
 def default_unit(food: Food) -> tuple[str, float]:
-    """Unit and amount to prefill: one serving if the food has servings, else 100 g."""
+    """Unit and amount to prefill: one serving, else the whole recipe, else 100 g."""
     if food.servings:
         return f"serving:{food.servings[0].id}", 1.0
+    if food.source is FoodSource.RECIPE and food.recipe_yield_g:
+        return RECIPE_UNIT, 1.0
     return "g", 100.0
 
 

@@ -13,6 +13,8 @@ from gwc.db.session import session_scope
 from gwc.nutrition import foods, log
 from gwc.nutrition.nutrients import NUTRIENTS, per100_of, scale
 from gwc.web.components.common import (
+    amount_input,
+    amount_text,
     from_picker,
     icon,
     now,
@@ -42,15 +44,7 @@ def log_modal() -> list:
                     dmc.Text(id="logm-sub", size="sm", c="dimmed"),
                     dmc.Group(
                         [
-                            dmc.NumberInput(
-                                id="logm-amount",
-                                label="Amount",
-                                min=0,
-                                step=0.25,
-                                decimalScale=2,
-                                w=110,
-                                inputProps={"inputMode": "decimal"},
-                            ),
+                            amount_input("logm-amount"),
                             dmc.Select(
                                 id="logm-unit", label="Unit", data=[], flex=1, allowDeselect=False
                             ),
@@ -112,7 +106,7 @@ def _open(request):
             food.id,
             unit_select_data(food),
             unit,
-            amount,
+            amount_text(amount),
             *to_picker(now()),
             food.is_favorite,
             "",
@@ -129,11 +123,15 @@ def _open(request):
 def _preview(amount, unit, food_id):
     if not food_id or not amount or not unit:
         return "Enter an amount."
+    try:
+        amount = log.parse_amount(amount)
+    except ValueError as e:
+        return str(e)
     with session_scope() as s:
         food = foods.load_food(s, int(food_id))
         if food is None:
             return ""
-        grams = foods.to_grams(food, float(amount), unit)
+        grams = foods.to_grams(food, amount, unit)
         return f"{grams:,.0f} g — " + preview_line(scale(per100_of(food), grams))
 
 
@@ -157,7 +155,7 @@ def _submit(_clicks, food_id, amount, unit, day, clock, favorite, done):
     if not food_id:
         raise PreventUpdate
     try:
-        amount = float(amount or 0)
+        amount = log.parse_amount(amount)
         with session_scope() as s:
             entry = log.log_food(
                 s,

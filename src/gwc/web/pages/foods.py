@@ -6,11 +6,18 @@ from dash.exceptions import PreventUpdate
 from gwc.db.models import Food, FoodSource
 from gwc.db.session import session_scope
 from gwc.nutrition import barcode, foods
-from gwc.nutrition.log import unit_label
+from gwc.nutrition.log import parse_amount, unit_label
 from gwc.nutrition.nutrients import NUTRIENTS
 from gwc.nutrition.service import get_off, get_usda
 from gwc.nutrition.usda import UsdaError, UsdaHit
-from gwc.web.components.common import icon, page_header, triggered_click, unit_select_data
+from gwc.web.components.common import (
+    amount_input,
+    amount_text,
+    icon,
+    page_header,
+    triggered_click,
+    unit_select_data,
+)
 from gwc.web.components.log_modal import preview_line
 
 BASIS_SERVING, BASIS_100G = "Per serving", "Per 100 g"
@@ -114,14 +121,7 @@ def _recipe_editor() -> dmc.Modal:
                 dmc.Select(id="re-usda-hit", placeholder="USDA results", data=[], display="none"),
                 dmc.Group(
                     [
-                        dmc.NumberInput(
-                            id="re-amount",
-                            label="Amount",
-                            min=0,
-                            decimalScale=2,
-                            w=110,
-                            inputProps={"inputMode": "decimal"},
-                        ),
+                        amount_input("re-amount"),
                         dmc.Select(
                             id="re-unit", label="Unit", data=[], flex=1, allowDeselect=False
                         ),
@@ -653,7 +653,7 @@ def recipe_food_units(food_id):
         if food is None:
             raise PreventUpdate
         unit, amount = foods.default_unit(food)
-        return unit_select_data(food), unit, amount
+        return unit_select_data(food), unit, amount_text(amount)
 
 
 @callback(
@@ -673,11 +673,15 @@ def recipe_items(_add, _rm, food_id, amount, unit, items):
     if ctx.triggered_id == "re-add":
         if not food_id or not amount or not unit:
             return no_update, no_update, "Pick an ingredient and amount first."
+        try:
+            amount = parse_amount(amount)
+        except ValueError as e:
+            return no_update, no_update, str(e)
         with session_scope() as s:
             food = foods.load_food(s, int(food_id))
             option = foods.resolve_unit(food, unit)
-            grams = float(amount) * option.grams
-            label = unit_label(float(amount), option.label)
+            grams = amount * option.grams
+            label = unit_label(amount, option.label)
             items.append({"food_id": food.id, "name": food.name, "grams": grams, "label": label})
         return items, None, ""
     clicked = triggered_click()

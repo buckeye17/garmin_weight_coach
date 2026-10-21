@@ -14,6 +14,8 @@ from gwc.db.session import session_scope
 from gwc.nutrition import foods, log
 from gwc.web.components.analysis_text import flag_messages, plan_summary
 from gwc.web.components.common import (
+    amount_input,
+    amount_text,
     fmt_clock,
     from_picker,
     icon,
@@ -77,15 +79,7 @@ def _edit_modal() -> dmc.Modal:
             [
                 dmc.Group(
                     [
-                        dmc.NumberInput(
-                            id="edit-amount",
-                            label="Amount",
-                            min=0,
-                            step=0.25,
-                            decimalScale=3,
-                            w=110,
-                            inputProps={"inputMode": "decimal"},
-                        ),
+                        amount_input("edit-amount"),
                         dmc.Select(
                             id="edit-unit", label="Unit", data=[], flex=1, allowDeselect=False
                         ),
@@ -521,7 +515,7 @@ def open_edit(_clicks):
             True,
             entry.id,
             entry.description,
-            amount,
+            amount_text(amount),
             unit_select_data(food),
             unit,
             *to_picker(entry.eaten_at),
@@ -560,7 +554,7 @@ def save_edit(_save, _delete, entry_id, amount, unit, day, clock, day_value, not
                 log.update_entry(
                     s,
                     int(entry_id),
-                    amount=float(amount or 0),
+                    amount=log.parse_amount(amount),
                     unit=unit or "g",
                     eaten_at=from_picker(day, clock),
                     food_day_override=None

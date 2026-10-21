@@ -1,6 +1,7 @@
 """Small helpers shared by pages."""
 
 from datetime import date, datetime
+from fractions import Fraction
 from zoneinfo import ZoneInfo
 
 import dash_mantine_components as dmc
@@ -13,8 +14,8 @@ from gwc.analysis.units import food_unit
 from gwc.config import get_settings
 from gwc.db.models import Food, FoodLog
 from gwc.db.types import utcnow
-from gwc.nutrition.foods import default_unit, unit_options
-from gwc.nutrition.log import entry_unit
+from gwc.nutrition.foods import RECIPE_UNIT, default_unit, unit_options
+from gwc.nutrition.log import entry_unit, fmt_count
 
 
 def icon(name: str, size: int = 18) -> DashIconify:
@@ -67,7 +68,35 @@ def fmt_clock(dt: datetime, food_day: date | None = None) -> str:
 def unit_select_data(food: Food | None) -> list[dict[str, str]]:
     if food is None:
         return [{"value": "g", "label": "g"}, {"value": "oz", "label": "oz"}]
-    return [{"value": o.value, "label": o.label} for o in unit_options(food)]
+    return [
+        {
+            "value": o.value,
+            "label": f"× {o.label}" if o.value == RECIPE_UNIT else o.label,
+        }
+        for o in unit_options(food)
+    ]
+
+
+def amount_input(id: str, **kwargs) -> dmc.TextInput:
+    """An Amount box that takes fractions ('1/8', '2.25x', '1 1/2') as well as numbers."""
+    return dmc.TextInput(
+        id=id,
+        label="Amount",
+        w=110,
+        placeholder="1, 1/8, 2.25",
+        inputProps={"autoComplete": "off"},
+        **kwargs,
+    )
+
+
+def amount_text(amount: float | None) -> str:
+    """An amount to prefill an Amount box: '1/8', '1 1/2', '150', '28.35'."""
+    if amount is None:
+        return ""
+    frac = Fraction(amount).limit_denominator(8)
+    if frac.denominator in (1, 2, 3, 4, 8) and abs(frac - Fraction(amount)) < 1e-4:
+        return fmt_count(amount)
+    return f"{round(amount, 3):g}"
 
 
 def prefill_amount(s: Session, food: Food) -> tuple[str, float]:

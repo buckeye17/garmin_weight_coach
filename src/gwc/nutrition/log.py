@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from gwc.analysis.food_day import FoodDays
 from gwc.db.models import Food, FoodDayStatus, FoodLog, LogSource
-from gwc.nutrition.foods import load_food, resolve_unit
+from gwc.nutrition.foods import RECIPE_LABEL, RECIPE_UNIT, load_food, resolve_unit, unit_options
 from gwc.nutrition.nutrients import NUTRIENT_KEYS, add, per100_of, scale, zero
 
 SOURCE_FOR = {"usda": LogSource.SEARCH, "custom": LogSource.CUSTOM, "recipe": LogSource.RECIPE}
@@ -41,6 +41,15 @@ def parse_count(text: str) -> Fraction:
     except ZeroDivisionError:
         raise ValueError("Can't divide by zero") from None
     return value / 100 if percent else value
+
+
+def parse_amount(value: str | float | None) -> float:
+    """An Amount box's value: a number, or text like '1/8', '2.25x' or '1 1/2'."""
+    if isinstance(value, int | float):
+        return float(value)
+    if value is None or not value.strip():
+        raise ValueError("Enter an amount")
+    return float(parse_count(value))
 
 
 def fmt_count(amount: float) -> str:
@@ -233,6 +242,9 @@ def entry_unit(s: Session, entry: FoodLog) -> tuple[float, str]:
         for sv in food.servings:
             if label == sv.label or label.endswith(f"× {sv.label}"):
                 return entry.amount, f"serving:{sv.id}"
+        whole = label == RECIPE_LABEL or label.endswith(f"× {RECIPE_LABEL}")
+        if whole and any(o.value == RECIPE_UNIT for o in unit_options(food)):
+            return entry.amount, RECIPE_UNIT
         if label.endswith(" oz"):
             return entry.amount, "oz"
     return round(entry.grams, 1), "g"

@@ -537,3 +537,83 @@ def test_search_posts_json_body():
     assert seen["method"] == "POST"
     assert seen["body"]["dataType"] == ["Foundation", "SR Legacy", "Survey (FNDDS)"]
     assert seen["body"]["query"] == "banana"
+
+
+def test_log_fraction_of_whole_recipe(db):
+    with session_scope() as s:
+        egg = _egg(s)
+        recipe = foods.save_recipe(
+            s, food_id=None, name="Frittata", items=[(egg.id, 400)], yield_g=360, servings=None
+        )
+        assert [o.value for o in foods.unit_options(recipe)] == ["recipe", "g", "oz"]
+        assert foods.default_unit(recipe) == ("recipe", 1.0)
+        assert foods.unit_options(egg)[-2:] == [
+            foods.UnitOption("g", "g", 1.0),
+            foods.UnitOption("oz", "oz", G_PER_OZ),
+        ]
+        assert "recipe" not in [o.value for o in foods.unit_options(egg)]
+
+        entry = log.log_food(
+            s,
+            food_id=recipe.id,
+            amount=log.parse_amount("1/8"),
+            unit="recipe",
+            eaten_at=utc(2026, 10, 20, 17),
+            tz="America/New_York",
+        )
+        assert entry.grams == pytest.approx(45) and entry.unit_label == "1/8 × whole recipe"
+        assert entry.kcal == pytest.approx(143 * 4 / 8)
+        assert log.entry_unit(s, entry) == (0.125, "recipe")
+
+        log.scale_entry(s, entry.id, Fraction(2))
+        assert entry.unit_label == "1/4 × whole recipe" and entry.grams == pytest.approx(90)
+
+        whole = log.log_food(
+            s,
+            food_id=recipe.id,
+            amount=1,
+            unit="recipe",
+            eaten_at=utc(2026, 10, 20, 18),
+            tz="America/New_York",
+        )
+        assert whole.unit_label == "whole recipe" and log.entry_unit(s, whole) == (1, "recipe")
+
+        # Recipes with servings still default to one serving, with the batch offered too.
+        served = foods.save_recipe(
+            s, food_id=None, name="Soup", items=[(egg.id, 100)], yield_g=None, servings=4
+        )
+        assert [o.label for o in foods.unit_options(served)][:2] == ["1 serving", "whole recipe"]
+        assert foods.default_unit(served)[0].startswith("serving:")
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(2, 2.0), (0.5, 0.5), ("1/8", 0.125), ("2.25x", 2.25), ("1 1/2", 1.5), (" 150 ", 150.0)],
+)
+def test_parse_amount(value, expected):
+    assert log.parse_amount(value) == expected
+
+
+@pytest.mark.parametrize("value", [None, "", "  ", "lots"])
+def test_parse_amount_rejects(value):
+    with pytest.raises(ValueError):
+        log.parse_amount(value)
+
+
+def test_amount_box_helpers(db):
+    from gwc.web.components.common import amount_text, unit_select_data
+
+    assert [amount_text(x) for x in (0.125, 1.5, 150.0, 28.35, None)] == [
+        "1/8",
+        "1 1/2",
+        "150",
+        "28.35",
+        "",
+    ]
+    with session_scope() as s:
+        egg = _egg(s)
+        recipe = foods.save_recipe(
+            s, food_id=None, name="Frittata", items=[(egg.id, 400)], yield_g=1240, servings=None
+        )
+        labels = [o["label"] for o in unit_select_data(recipe)]
+        assert labels == ["× whole recipe", "g", "oz"]
