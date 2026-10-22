@@ -18,7 +18,7 @@ from gwc.web.components.common import (
     triggered_click,
     unit_select_data,
 )
-from gwc.web.components.log_modal import preview_line
+from gwc.web.components.log_modal import category_input, preview_line
 
 BASIS_SERVING, BASIS_100G = "Per serving", "Per 100 g"
 
@@ -43,6 +43,7 @@ def _food_editor() -> dmc.Modal:
             [
                 dmc.TextInput(id="fe-name", label="Name", required=True),
                 dmc.TextInput(id="fe-brand", label="Brand"),
+                category_input("fe-cats"),
                 dmc.SegmentedControl(
                     id="fe-basis",
                     data=[BASIS_SERVING, BASIS_100G],
@@ -93,6 +94,7 @@ def _recipe_editor() -> dmc.Modal:
         dmc.Stack(
             [
                 dmc.TextInput(id="re-name", label="Recipe name", required=True),
+                category_input("re-cats"),
                 dmc.Divider(label="Add ingredient", labelPosition="left"),
                 dmc.Select(
                     id="re-food",
@@ -248,6 +250,7 @@ def _food_row(f: Food) -> dmc.Paper:
         )
     if f.brand:
         details.insert(0, f.brand)
+    details += f.category_names
     edit = (
         [
             dmc.ActionIcon(
@@ -351,6 +354,8 @@ def _nutrient_outputs():
     Output("fe-id", "data"),
     Output("fe-name", "value"),
     Output("fe-brand", "value"),
+    Output("fe-cats", "data"),
+    Output("fe-cats", "value"),
     Output("fe-basis", "value"),
     Output("fe-serving-label", "value"),
     Output("fe-serving-grams", "value"),
@@ -365,7 +370,23 @@ def _nutrient_outputs():
 def open_food_editor(_new, _edit):
     blank = [None] * len(NUTRIENTS)
     if ctx.triggered_id == "new-food":
-        return True, None, "", "", BASIS_SERVING, "1 serving", None, blank, "none", "", "New food"
+        with session_scope() as s:
+            choices = foods.category_choices(s)
+        return (
+            True,
+            None,
+            "",
+            "",
+            choices,
+            [],
+            BASIS_SERVING,
+            "1 serving",
+            None,
+            blank,
+            "none",
+            "",
+            "New food",
+        )
     clicked = triggered_click()
     if clicked is None:
         raise PreventUpdate
@@ -386,6 +407,8 @@ def open_food_editor(_new, _edit):
             food.id,
             food.name,
             food.brand or "",
+            foods.category_choices(s),
+            food.category_names,
             BASIS_SERVING if serving else BASIS_100G,
             serving.label if serving else "",
             serving.grams if serving else None,
@@ -415,6 +438,7 @@ def basis_hint(basis):
     State("fe-id", "data"),
     State("fe-name", "value"),
     State("fe-brand", "value"),
+    State("fe-cats", "value"),
     State("fe-basis", "value"),
     State("fe-serving-label", "value"),
     State("fe-serving-grams", "value"),
@@ -422,7 +446,9 @@ def basis_hint(basis):
     State("foods-changed", "data"),
     prevent_initial_call=True,
 )
-def save_food(_save, _archive, food_id, name, brand, basis, s_label, s_grams, values, changed):
+def save_food(
+    _save, _archive, food_id, name, brand, categories, basis, s_label, s_grams, values, changed
+):
     if ctx.triggered_id == "fe-archive":
         if food_id:
             with session_scope() as s:
@@ -444,7 +470,7 @@ def save_food(_save, _archive, food_id, name, brand, basis, s_label, s_grams, va
         per100 = entered
     try:
         with session_scope() as s:
-            foods.save_custom_food(
+            food = foods.save_custom_food(
                 s,
                 food_id=int(food_id) if food_id else None,
                 name=name,
@@ -452,6 +478,7 @@ def save_food(_save, _archive, food_id, name, brand, basis, s_label, s_grams, va
                 per100=per100,
                 servings=servings,
             )
+            foods.set_categories(s, food.id, categories or [])
     except ValueError as e:
         return no_update, no_update, str(e)
     return False, (changed or 0) + 1, ""
@@ -471,6 +498,8 @@ def _ingredient_options(s) -> list[dict[str, str]]:
     Output("re-modal", "opened", allow_duplicate=True),
     Output("re-id", "data"),
     Output("re-name", "value"),
+    Output("re-cats", "data"),
+    Output("re-cats", "value"),
     Output("re-items", "data"),
     Output("re-yield", "value"),
     Output("re-servings", "value"),
@@ -486,8 +515,23 @@ def _ingredient_options(s) -> list[dict[str, str]]:
 def open_recipe_editor(_new, _edit):
     with session_scope() as s:
         options = _ingredient_options(s)
+        choices = foods.category_choices(s)
         if ctx.triggered_id == "new-recipe":
-            return True, None, "", [], None, None, options, "none", "", "New recipe", ""
+            return (
+                True,
+                None,
+                "",
+                choices,
+                [],
+                [],
+                None,
+                None,
+                options,
+                "none",
+                "",
+                "New recipe",
+                "",
+            )
         clicked = triggered_click()
         if clicked is None:
             raise PreventUpdate
@@ -518,6 +562,8 @@ def open_recipe_editor(_new, _edit):
             True,
             recipe.id,
             recipe.name,
+            choices,
+            recipe.category_names,
             items,
             yield_g,
             n_servings,
@@ -737,13 +783,14 @@ def recipe_preview(items, yield_g, n_servings):
     Input("re-archive", "n_clicks"),
     State("re-id", "data"),
     State("re-name", "value"),
+    State("re-cats", "value"),
     State("re-items", "data"),
     State("re-yield", "value"),
     State("re-servings", "value"),
     State("foods-changed", "data"),
     prevent_initial_call=True,
 )
-def save_recipe(_save, _archive, recipe_id, name, items, yield_g, n_servings, changed):
+def save_recipe(_save, _archive, recipe_id, name, categories, items, yield_g, n_servings, changed):
     if ctx.triggered_id == "re-archive":
         if recipe_id:
             with session_scope() as s:
@@ -753,7 +800,7 @@ def save_recipe(_save, _archive, recipe_id, name, items, yield_g, n_servings, ch
         return no_update, no_update, "Give the recipe a name.", no_update
     try:
         with session_scope() as s:
-            foods.save_recipe(
+            recipe = foods.save_recipe(
                 s,
                 food_id=int(recipe_id) if recipe_id else None,
                 name=name,
@@ -761,6 +808,7 @@ def save_recipe(_save, _archive, recipe_id, name, items, yield_g, n_servings, ch
                 yield_g=float(yield_g) if yield_g else None,
                 servings=int(n_servings) if n_servings else None,
             )
+            foods.set_categories(s, recipe.id, categories or [])
     except ValueError as e:
         return no_update, no_update, str(e), no_update
     return False, (changed or 0) + 1, "", "recipe"

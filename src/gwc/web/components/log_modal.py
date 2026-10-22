@@ -2,7 +2,8 @@
 
 A page opens it by writing {"food_id": ..., "nonce": ...} to the `logm-open`
 store (with allow_duplicate). After a successful log it bumps `logm-done`
-and shows a confirmation in `logm-result`.
+and shows a confirmation in `logm-result`. Editing the food's categories
+saves right away and bumps `logm-cats-saved`.
 """
 
 import dash_mantine_components as dmc
@@ -33,11 +34,24 @@ def preview_line(totals: dict[str, float]) -> str:
     return " · ".join(parts)
 
 
+def category_input(id: str) -> dmc.TagsInput:
+    """Pick or type categories for a food; `data` is filled with `foods.category_choices`."""
+    return dmc.TagsInput(
+        id=id,
+        label="Categories",
+        placeholder="Snack, Restaurant, …",
+        data=[],
+        clearable=True,
+        selectFirstOptionOnChange=True,  # Enter on "sna" picks "Snack" rather than adding "sna"
+    )
+
+
 def log_modal() -> list:
     return [
         dcc.Store(id="logm-open"),
         dcc.Store(id="logm-food-id"),
         dcc.Store(id="logm-done", data=0),
+        dcc.Store(id="logm-cats-saved", data=0),
         dmc.Modal(
             dmc.Stack(
                 [
@@ -54,6 +68,7 @@ def log_modal() -> list:
                     ),
                     when_inputs("logm"),
                     dmc.Paper(dmc.Text(id="logm-preview", size="sm"), p="xs", withBorder=True),
+                    category_input("logm-cats"),
                     dmc.Group(
                         [
                             dmc.Switch(id="logm-fav", label="Favorite"),
@@ -85,6 +100,8 @@ def log_modal() -> list:
     Output("logm-date", "value"),
     Output("logm-clock", "value"),
     Output("logm-fav", "checked"),
+    Output("logm-cats", "data"),
+    Output("logm-cats", "value"),
     Output("logm-error", "children", allow_duplicate=True),
     Input("logm-open", "data"),
     prevent_initial_call=True,
@@ -109,8 +126,30 @@ def _open(request):
             amount_text(amount),
             *to_picker(now()),
             food.is_favorite,
+            foods.category_choices(s),
+            food.category_names,
             "",
         )
+
+
+@callback(
+    Output("logm-cats-saved", "data"),
+    Output("logm-cats", "value", allow_duplicate=True),
+    Output("logm-cats", "data", allow_duplicate=True),
+    Input("logm-cats", "value"),
+    State("logm-food-id", "data"),
+    State("logm-cats-saved", "data"),
+    prevent_initial_call=True,
+)
+def _save_categories(names, food_id, saved):
+    if not food_id:
+        raise PreventUpdate
+    with session_scope() as s:
+        food = foods.load_food(s, int(food_id))
+        if food is None or food.category_names == (names or []):
+            raise PreventUpdate
+        foods.set_categories(s, food.id, names or [])
+        return (saved or 0) + 1, food.category_names, foods.category_choices(s)
 
 
 @callback(

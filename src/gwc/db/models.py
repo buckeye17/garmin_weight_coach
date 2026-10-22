@@ -229,6 +229,26 @@ class Food(TimestampMixin, NutrientsPer100gMixin, Base):
         cascade="all, delete-orphan",
         foreign_keys="RecipeItem.recipe_id",
     )
+    categories: Mapped[list["FoodCategory"]] = relationship(
+        back_populates="food", cascade="all, delete-orphan"
+    )
+
+    @property
+    def category_names(self) -> list[str]:
+        return sorted((c.name for c in self.categories), key=str.casefold)
+
+
+class FoodCategory(Base):
+    """A user-chosen label such as "snack" or "restaurant"; a food can have several."""
+
+    __tablename__ = "food_category"
+
+    food_id: Mapped[int] = mapped_column(
+        ForeignKey("food.id", ondelete="CASCADE"), primary_key=True
+    )
+    name: Mapped[str] = mapped_column(String(64), primary_key=True, index=True)
+
+    food: Mapped[Food] = relationship(back_populates="categories")
 
 
 class FoodServing(Base):

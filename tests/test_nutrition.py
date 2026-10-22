@@ -450,6 +450,32 @@ def test_search_orders_favorites_then_recent(db):
         assert [f.name for f in foods.search_foods(s)] == ["Bagel", "Apple"]
 
 
+def test_categories(db):
+    with session_scope() as s:
+        blt = foods.save_custom_food(
+            s, food_id=None, name="BLT", brand=None, per100={}, servings=[]
+        )
+        cake = foods.save_custom_food(
+            s, food_id=None, name="Cake", brand=None, per100={}, servings=[]
+        )
+        foods.set_categories(s, blt.id, [" sandwich ", "Diner  food", "SANDWICH", ""])
+        foods.set_categories(s, cake.id, ["dessert", "diner food"])
+        s.flush()
+        # Suggested and already-used spellings win; duplicates and blanks are dropped.
+        assert blt.category_names == ["Diner food", "Sandwich"]
+        assert cake.category_names == ["Dessert", "Diner food"]
+        assert foods.all_categories(s) == ["Dessert", "Diner food", "Sandwich"]
+        assert "Snack" in foods.category_choices(s)
+        assert [f.name for f in foods.search_foods(s, category="Diner food")] == ["BLT", "Cake"]
+        assert [f.name for f in foods.search_foods(s, "c", category="Dessert")] == ["Cake"]
+
+        foods.set_categories(s, blt.id, [])
+        foods.archive_food(s, cake.id)
+        s.flush()
+        assert blt.categories == []
+        assert foods.all_categories(s) == []
+
+
 def test_incomplete_flag(db):
     d = date(2026, 10, 20)
     with session_scope() as s:

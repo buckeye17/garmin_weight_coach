@@ -6,12 +6,25 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from gwc.analysis.units import G_PER_OZ
-from gwc.db.models import Food, FoodLog, FoodServing, FoodSource, RecipeItem
+from gwc.db.models import Food, FoodCategory, FoodLog, FoodServing, FoodSource, RecipeItem
 from gwc.nutrition.nutrients import NUTRIENT_KEYS, add, per100_of, scale, zero
 from gwc.nutrition.usda import Serving, UsdaHit
 
 RECIPE_UNIT = "recipe"
 RECIPE_LABEL = "whole recipe"
+
+# Offered in the category picker alongside the ones already in use.
+SUGGESTED_CATEGORIES = (
+    "Breakfast",
+    "Dessert",
+    "Drink",
+    "Fruit",
+    "Meat",
+    "Restaurant",
+    "Sandwich",
+    "Snack",
+    "Vegetable",
+)
 
 
 @dataclass(frozen=True)
@@ -56,6 +69,7 @@ def load_food(s: Session, food_id: int) -> Food | None:
         .where(Food.id == food_id)
         .options(
             selectinload(Food.servings),
+            selectinload(Food.categories),
             selectinload(Food.recipe_items).selectinload(RecipeItem.ingredient),
         )
     ).first()
@@ -232,8 +246,52 @@ def archive_food(s: Session, food_id: int) -> None:
         food.is_favorite = False
 
 
+def all_categories(s: Session) -> list[str]:
+    """Categories in use on foods that aren't archived, alphabetically."""
+    q = (
+        select(FoodCategory.name)
+        .join(Food, Food.id == FoodCategory.food_id)
+        .where(Food.is_archived.is_(False))
+        .distinct()
+    )
+    return sorted(s.scalars(q), key=str.casefold)
+
+
+def category_choices(s: Session) -> list[str]:
+    """Categories in use plus the suggested ones, for a picker."""
+    used = all_categories(s)
+    known = {c.casefold() for c in used}
+    return sorted(
+        used + [c for c in SUGGESTED_CATEGORIES if c.casefold() not in known], key=str.casefold
+    )
+
+
+def set_categories(s: Session, food_id: int, names: list[str]) -> None:
+    """Replace a food's categories, reusing an existing spelling ("snack" → "Snack")."""
+    food = s.scalars(
+        select(Food).where(Food.id == food_id).options(selectinload(Food.categories))
+    ).first()
+    if food is None:
+        return
+    spelling = {c.casefold(): c for c in SUGGESTED_CATEGORIES}
+    spelling.update({c.casefold(): c for c in s.scalars(select(FoodCategory.name).distinct())})
+    wanted: dict[str, str] = {}
+    for name in names:
+        name = " ".join(name.split())[:64]
+        if name:
+            wanted.setdefault(name.casefold(), spelling.get(name.casefold(), name))
+    current = {c.name: c for c in food.categories}
+    food.categories = [current.get(n) or FoodCategory(name=n) for n in wanted.values()]
+    s.flush()
+
+
 def search_foods(
-    s: Session, query: str = "", *, sources: list[FoodSource] | None = None, limit: int = 50
+    s: Session,
+    query: str = "",
+    *,
+    sources: list[FoodSource] | None = None,
+    category: str | None = None,
+    limit: int = 50,
 ) -> list[Food]:
     last_used = (
         select(FoodLog.food_id, func.max(FoodLog.eaten_at).label("last_used"))
@@ -244,12 +302,14 @@ def search_foods(
         select(Food)
         .outerjoin(last_used, last_used.c.food_id == Food.id)
         .where(Food.is_archived.is_(False))
-        .options(selectinload(Food.servings))
+        .options(selectinload(Food.servings), selectinload(Food.categories))
         .order_by(Food.is_favorite.desc(), last_used.c.last_used.desc().nulls_last(), Food.name)
         .limit(limit)
     )
     if sources:
         q = q.where(Food.source.in_(sources))
+    if category:
+        q = q.where(Food.categories.any(FoodCategory.name == category))
     for word in query.split():
         pattern = f"%{word}%"
         q = q.where(or_(Food.name.ilike(pattern), Food.brand.ilike(pattern)))

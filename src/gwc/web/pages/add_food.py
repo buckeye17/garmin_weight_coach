@@ -16,6 +16,7 @@ from gwc.web.components.log_modal import log_modal
 from gwc.web.components.scan import scan_panel
 
 SOURCE_BADGE = {FoodSource.USDA: "USDA", FoodSource.CUSTOM: "Mine", FoodSource.RECIPE: "Recipe"}
+ALL_CATEGORIES = "__all__"
 
 
 def _result_row(title: str, subtitle: str, kcal: float | None, button_id: dict) -> dmc.Paper:
@@ -63,6 +64,7 @@ def _food_rows(items: list[Food]) -> list:
             bits.insert(0, "★")
         if f.brand:
             bits.append(f.brand)
+        bits += f.category_names
         rows.append(
             _result_row(f.name, " · ".join(bits), f.kcal, {"type": "my-food", "index": f.id})
         )
@@ -137,6 +139,12 @@ def layout(**_kwargs):
                                     leftSection=icon("tabler:filter", 16),
                                     debounce=300,
                                 ),
+                                dmc.ChipGroup(
+                                    dmc.Group(id="mine-cat-chips", gap=6),
+                                    id="mine-cat",
+                                    value=ALL_CATEGORIES,
+                                    multiple=False,
+                                ),
                                 dmc.Stack(id="mine-results", gap="xs"),
                             ],
                             pt="sm",
@@ -206,17 +214,42 @@ def pick_usda(_clicks, hits):
     return {"food_id": food_id, "nonce": time.time()}
 
 
+def _category_chips(categories: list[str]) -> list:
+    if not categories:
+        return [
+            dmc.Text(
+                "Tip: tap + on a food to give it categories like Snack or Restaurant, "
+                "then filter by them here.",
+                size="xs",
+                c="dimmed",
+            )
+        ]
+    return [
+        dmc.Chip(name, value=value, size="xs")
+        for name, value in [("All", ALL_CATEGORIES), *((c, c) for c in categories)]
+    ]
+
+
 @callback(
     Output("mine-results", "children"),
+    Output("mine-cat-chips", "children"),
+    Output("mine-cat", "value"),
     Input("mine-query", "value"),
+    Input("mine-cat", "value"),
     Input("add-tabs", "value"),
     Input("logm-done", "data"),
+    Input("logm-cats-saved", "data"),
 )
-def list_mine(query, tab, _done):
+def list_mine(query, category, tab, _done, _cats_saved):
     if tab != "mine":
-        return no_update
+        return no_update, no_update, no_update
     with session_scope() as s:
-        return _food_rows(foods.search_foods(s, query or ""))
+        categories = foods.all_categories(s)
+        if category not in categories:
+            category = ALL_CATEGORIES  # e.g. its last food was recategorized
+        chosen = None if category == ALL_CATEGORIES else category
+        rows = _food_rows(foods.search_foods(s, query or "", category=chosen))
+    return rows, _category_chips(categories), category
 
 
 @callback(
