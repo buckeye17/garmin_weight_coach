@@ -7,7 +7,7 @@ from dash import ALL, Input, Output, State, callback, ctx, dcc, no_update
 from dash.exceptions import PreventUpdate
 
 from gwc.analysis.food_day import current_food_day, food_days_around
-from gwc.analysis.targets import NO_GOAL, day_targets
+from gwc.analysis.targets import NO_GOAL, TargetPlan, day_targets
 from gwc.analysis.units import weight_unit
 from gwc.db.models import FoodLog
 from gwc.db.session import session_scope
@@ -300,22 +300,31 @@ def _entry_row(e: FoodLog, day: date) -> dmc.UnstyledButton:
     )
 
 
-def _ring_stat(label: str, value: str) -> dmc.Stack:
+def _ring_stat(label: str, value: str, note: str | None = None) -> dmc.Stack:
     return dmc.Stack(
         [
             dmc.Text(label, size="xs", c="dimmed", tt="uppercase", fw=600, lts=0.4),
             dmc.Text(value, fw=700, className="gwc-stat-value-sm"),
+            dmc.Text(note, size="xs", c="dimmed") if note else None,
         ],
         gap=0,
     )
 
 
+def _workout_note(plan: TargetPlan) -> str | None:
+    """E.g. "2,100 base + 380 workouts": what the day's workouts add on top of base."""
+    base = plan.base_values.get("kcal")
+    if base is None or plan.eat_back_pct is None:
+        return None
+    return f"{base:,.0f} base + {plan.workout_kcal:,.0f} workouts"
+
+
 def _calorie_ring(
-    totals: dict[str, float], targets: dict[str, float | None], n_entries: int
+    totals: dict[str, float], plan: TargetPlan, n_entries: int
 ) -> tuple[list[dict], list, list]:
     """Ring sections, the label inside the ring, and the stats beside it."""
     eaten = totals.get("kcal") or 0
-    target = targets.get("kcal")
+    target = plan.values.get("kcal")
     stats = [_ring_stat("Eaten", f"{eaten:,.0f} kcal")]
     if not target:
         label = [
@@ -336,7 +345,7 @@ def _calorie_ring(
     # A zero-width section still draws a round-cap dot, so leave the ring empty.
     sections = [{"value": min(100.0, 100 * eaten / target), "color": color}] if eaten else []
     stats += [
-        _ring_stat("Target", f"{target:,.0f} kcal"),
+        _ring_stat("Target", f"{target:,.0f} kcal", _workout_note(plan)),
         _ring_stat("Entries", f"{n_entries}"),
     ]
     return sections, label, stats
@@ -421,7 +430,7 @@ def render_day(selected, _done, _edited):
             f"(or {end_text} if Garmin has no sleep)"
         )
 
-    ring, remaining, ring_stats = _calorie_ring(totals, targets, len(entries))
+    ring, remaining, ring_stats = _calorie_ring(totals, plan, len(entries))
     unit = weight_unit()
     hint = []
     if NO_GOAL in plan.flags and "kcal" not in plan.overridden:
