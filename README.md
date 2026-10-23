@@ -1,6 +1,6 @@
 # Garmin Weight Coach
 
-Personal web app that syncs Garmin scale/watch data, tracks daily nutrition against suggested targets, projects weight change over the next 4 weeks, and includes a Claude coach. It runs on one Windows PC and is reached from a desktop browser or a phone over Tailscale. See [docs/PLAN.md](docs/PLAN.md) for the full design.
+Personal web app that syncs Garmin scale/watch data, tracks daily nutrition against suggested targets, projects weight change over the next 4 weeks, and includes a Claude coach. It runs on one Windows PC or Linux server and is reached from a desktop browser or a phone over Tailscale. See [docs/PLAN.md](docs/PLAN.md) for the full design.
 
 - **Today**: progress bars for calories, protein, carbs, fat, fiber, sugar and sodium for the current food day (which ends when you fall asleep, per Garmin). Workouts raise that day's targets once they sync (see below).
 - **Add food**: USDA search, your own foods and recipes, or describe a meal in plain English and let Claude itemize it for review. Name a chain restaurant ("Chipotle chicken bowl, no cheese") and Claude looks up the chain's published nutrition on the web, links the source, and saves the item to your foods for next time. If it can't find published numbers, you type them in from the menu or receipt. On the **Scan** tab, scan a package's barcode with the phone camera (Chrome on Android, over the Tailscale HTTPS address): it's looked up in USDA's branded foods, then Open Food Facts, and once you log it the barcode is remembered, so the next scan opens it straight away. For a product neither database has (or gets wrong), photograph the Nutrition Facts and Claude reads it into a form you check before saving. Recipes on the Foods page have a scan button too, for adding packaged ingredients.
@@ -55,6 +55,21 @@ powershell -ExecutionPolicy Bypass -File scripts\install_autostart.ps1 -Uninstal
 ```
 
 Use `-StartNow` only after stopping any copy you started by hand, since both would need port 8060. Output goes to `data/logs/gwc.log`. Stop or restart it with `-Stop` / `-Restart`, not Task Scheduler's **End**: that only ends the hidden console wrapper, and uv and the app keep running. `-Stop` also stops a copy started from a terminal.
+
+### Run on a Linux server
+
+`scripts/gwc.service` is a systemd user service that runs `uv run --no-dev gwc serve` at boot and restarts it if it crashes. It expects the checkout at `~/git_repos/garmin_weight_coach` and uv in `~/.local/bin`.
+
+```bash
+git clone https://github.com/buckeye17/garmin_weight_coach.git ~/git_repos/garmin_weight_coach
+cd ~/git_repos/garmin_weight_coach && uv sync --no-dev
+cp .env.example .env                       # set GWC_TZ: servers usually run on UTC
+mkdir -p ~/.config/systemd/user && cp scripts/gwc.service ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user enable --now gwc
+sudo loginctl enable-linger "$USER"        # start at boot without logging in
+```
+
+For the subscription coach backend, log in once with the Claude Code CLI bundled in the venv (`.venv/lib/python3.12/site-packages/claude_agent_sdk/_bundled/claude`, then `/login`). To move from another PC, stop the app there and copy `.env`, `data/gwc.db` and `data/garmin_tokens/`. After pulling new code, run `systemctl --user restart gwc`; logs are in `data/logs/gwc.log` and `journalctl --user -u gwc`. For Tailscale Serve without sudo, run `sudo tailscale set --operator=$USER` once.
 
 ## Phone access with Tailscale
 

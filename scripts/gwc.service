@@ -1,0 +1,22 @@
+# systemd user service for running the app on a Linux server.
+# Install (as the user that owns the checkout; no root needed):
+#   mkdir -p ~/.config/systemd/user
+#   cp scripts/gwc.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now gwc
+#   sudo loginctl enable-linger "$USER"   # keep it running while logged out and start at boot
+# Assumes the checkout is at ~/git_repos/garmin_weight_coach and uv is in ~/.local/bin.
+
+[Unit]
+Description=Garmin Weight Coach
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/git_repos/garmin_weight_coach
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/.local/bin/uv run --no-dev gwc serve
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target
