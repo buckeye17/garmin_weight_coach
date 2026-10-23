@@ -18,6 +18,11 @@ live, so a sync after a workout raises that day's calories, on top of a
 manual calorie override too. The extra goes 25/75 to fat/carbs (whichever
 isn't overridden), with fiber and sugar scaled along. Days recorded before
 this existed have no `eat_back_pct` and get no adjustment.
+
+Steps: the base also leaves out above-usual steps, and each food day adds
+`step_pct` of its own active kcal outside workouts above `typical_step_kcal`,
+rounded down, live the same way. Days recorded before this have no `step_pct`
+(their base still includes steps) and get no step credit.
 """
 
 import math
@@ -29,7 +34,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from gwc.analysis.energy import DAYS_PER_MONTH
-from gwc.analysis.exercise import EAT_BACK_PREF, Workout, workouts_by_food_day
+from gwc.analysis.exercise import (
+    EAT_BACK_PREF,
+    STEPS_PREF,
+    Workout,
+    step_kcal_by_date,
+    workouts_by_food_day,
+)
 from gwc.analysis.food_day import current_food_day
 from gwc.analysis.snapshot import Snapshot, build_snapshot
 from gwc.db.models import DailyTarget
@@ -79,7 +90,13 @@ class TargetPlan:
     workout_avg_kcal: float | None = None  # mean net workout kcal/day behind the burn estimate
     workouts: list[Workout] = field(default_factory=list)  # this food day's
     workout_kcal: float = 0.0  # added to calories for them
-    base_values: dict[str, float | None] = field(default_factory=dict)  # before workouts
+    # Steps. `tdee_kcal` also leaves out the average above-usual steps.
+    step_pct: float | None = None  # None: recorded before the step adjustment
+    typical_step_kcal: float | None = None  # usual active kcal/day outside workouts
+    step_avg_kcal: float | None = None  # mean active kcal/day above usual behind the burn
+    step_kcal_today: float | None = None  # this food day's active kcal outside workouts
+    step_credit_kcal: float = 0.0  # added to calories for steps above usual
+    base_values: dict[str, float | None] = field(default_factory=dict)  # before activity
 
     @property
     def complete(self) -> bool:
@@ -87,11 +104,12 @@ class TargetPlan:
 
     @property
     def typical_kcal(self) -> float | None:
-        """Calories on a day with your average workouts, for projections."""
+        """Calories on a day with your average workouts and steps, for projections."""
         base = (self.base_values or self.values).get("kcal")
         if base is None or self.eat_back_pct is None:
             return base
-        return base + self.eat_back_pct / 100 * (self.workout_avg_kcal or 0.0)
+        steps = (self.step_pct or 0.0) / 100 * (self.step_avg_kcal or 0.0)
+        return base + self.eat_back_pct / 100 * (self.workout_avg_kcal or 0.0) + steps
 
     def details(self) -> dict:
         return {
@@ -104,6 +122,9 @@ class TargetPlan:
             "flags": self.flags,
             "eat_back_pct": self.eat_back_pct,
             "workout_avg_kcal": self.workout_avg_kcal,
+            "step_pct": self.step_pct,
+            "typical_step_kcal": self.typical_step_kcal,
+            "step_avg_kcal": self.step_avg_kcal,
         }
 
 
@@ -213,7 +234,7 @@ def suggest(
 
 
 def plan_from_snapshot(s: Session, snap: Snapshot) -> TargetPlan:
-    """Today's base targets: from burn without workouts (see `add_workouts`)."""
+    """Today's base targets: from burn without workouts or extra steps (see `add_activity`)."""
     plan = suggest(
         goal_kg_per_month=goal_kg_per_month(s),
         tdee_kcal=snap.chosen.base_kcal,
@@ -229,10 +250,13 @@ def plan_from_snapshot(s: Session, snap: Snapshot) -> TargetPlan:
         plan.flags.append(ASSUMED_BODY_FAT)
     plan.eat_back_pct = float(get_pref(EAT_BACK_PREF, session=s))
     plan.workout_avg_kcal = snap.chosen.exercise_kcal
+    plan.step_pct = float(get_pref(STEPS_PREF, session=s))
+    plan.typical_step_kcal = snap.chosen.typical_step_kcal
+    plan.step_avg_kcal = snap.chosen.step_kcal
     return plan
 
 
-# --------------------------------------------------------------------------- workouts
+# --------------------------------------------------------------------------- workouts and steps
 
 
 def workout_kcal(eat_back_pct: float | None, workouts: list[Workout]) -> float:
@@ -240,6 +264,15 @@ def workout_kcal(eat_back_pct: float | None, workouts: list[Workout]) -> float:
     if not eat_back_pct:
         return 0.0
     return _r(eat_back_pct / 100 * sum(w.net_kcal for w in workouts), 10)
+
+
+def step_credit(
+    step_pct: float | None, typical_step_kcal: float | None, step_kcal: float | None
+) -> float:
+    """Calories a day's above-usual steps add to its target, rounded down to be cautious."""
+    if not step_pct or typical_step_kcal is None or step_kcal is None:
+        return 0.0
+    return math.floor(step_pct / 100 * max(0.0, step_kcal - typical_step_kcal) / 10) * 10
 
 
 def _with_extra_kcal(
@@ -263,17 +296,21 @@ def _with_extra_kcal(
     return out
 
 
-def add_workouts(
-    s: Session, tz: ZoneInfo, plan: TargetPlan, day: date, workouts: list[Workout] | None = None
-) -> TargetPlan:
-    """`plan` (base targets) plus food day `day`'s share of its workout calories."""
+def add_activity(s: Session, tz: ZoneInfo, plan: TargetPlan, day: date) -> TargetPlan:
+    """`plan` (base targets) plus food day `day`'s share of its workout and step calories.
+
+    Steps come from Garmin's summary for the calendar date of the same name.
+    """
     plan = replace(plan, base_values=dict(plan.values))
     if plan.eat_back_pct is None:
         return plan
-    if workouts is None:
-        workouts = workouts_by_food_day(s, tz, day, day).get(day, [])
-    extra = workout_kcal(plan.eat_back_pct, workouts)
-    plan = replace(plan, workouts=workouts, workout_kcal=extra)
+    workouts = workouts_by_food_day(s, tz, day, day).get(day, [])
+    plan = replace(plan, workouts=workouts, workout_kcal=workout_kcal(plan.eat_back_pct, workouts))
+    if plan.step_pct is not None:
+        steps = step_kcal_by_date(s, tz, day, day).get(day)
+        credit = step_credit(plan.step_pct, plan.typical_step_kcal, steps)
+        plan = replace(plan, step_kcal_today=steps, step_credit_kcal=credit)
+    extra = plan.workout_kcal + plan.step_credit_kcal
     if extra and plan.values.get("kcal") is not None:
         plan.values = _with_extra_kcal(plan.base_values, extra, plan.overridden)
     return plan
@@ -298,6 +335,9 @@ def _from_row(row: DailyTarget) -> TargetPlan:
         frozen=True,
         eat_back_pct=d.get("eat_back_pct"),
         workout_avg_kcal=d.get("workout_avg_kcal"),
+        step_pct=d.get("step_pct"),
+        typical_step_kcal=d.get("typical_step_kcal"),
+        step_avg_kcal=d.get("step_avg_kcal"),
     )
 
 
@@ -307,11 +347,11 @@ def day_targets(
     """Targets for food day `day`: frozen ones if recorded, else computed from current data.
 
     Today's are recorded the first time they're computed (when every value is known).
-    Either way the day's workouts are added on top, from whatever has synced so far.
+    Either way the day's workouts and steps are added on top, from whatever has synced so far.
     """
     row = s.get(DailyTarget, day)
     if row is not None:
-        return add_workouts(s, tz, _from_row(row), day)
+        return add_activity(s, tz, _from_row(row), day)
     snap = snap or build_snapshot(s, tz, now)
     plan = plan_from_snapshot(s, snap)
     if day == snap.today and plan.complete:
@@ -326,7 +366,7 @@ def day_targets(
         )
         s.flush()
         plan.frozen = True
-    return add_workouts(s, tz, plan, day)
+    return add_activity(s, tz, plan, day)
 
 
 def refreeze_today(tz: ZoneInfo, now: datetime) -> None:
@@ -338,14 +378,21 @@ def refreeze_today(tz: ZoneInfo, now: datetime) -> None:
 
 
 def frozen_targets(s: Session, tz: ZoneInfo, start: date, end: date) -> dict[date, float]:
-    """Recorded calorie targets by food day, with each day's workouts added, for charts."""
+    """Recorded calorie targets by food day, with each day's workouts and steps added."""
     rows = s.execute(
         select(DailyTarget.food_day, DailyTarget.kcal, DailyTarget.details).where(
             DailyTarget.food_day >= start, DailyTarget.food_day <= end
         )
     ).all()
-    workouts = workouts_by_food_day(s, tz, start, end) if rows else {}
+    if not rows:
+        return {}
+    workouts = workouts_by_food_day(s, tz, start, end)
+    steps = step_kcal_by_date(s, tz, start, end)
     return {
-        d: kcal + workout_kcal((details or {}).get("eat_back_pct"), workouts.get(d, []))
+        d: kcal
+        + workout_kcal((details or {}).get("eat_back_pct"), workouts.get(d, []))
+        + step_credit(
+            (details or {}).get("step_pct"), (details or {}).get("typical_step_kcal"), steps.get(d)
+        )
         for d, kcal, details in rows
     }

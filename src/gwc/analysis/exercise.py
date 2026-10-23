@@ -6,7 +6,10 @@ leaves workouts out (`TdeeEstimate.base_kcal`), and each food day adds a share
 (`EAT_BACK_PREF`) of that day's workouts. So a workout is credited once, on the
 food day it happened, not again through the next week's burn average.
 
-Only recorded Garmin activities count; extra walking stays in the base burn.
+Steps outside workouts are credited the same way but more cautiously: a share
+(`STEPS_PREF`, default 50 %) of the day's active kcal outside workouts above your
+usual amount (tdee.py), rounded down. Garmin's active kcal accrues through the
+day, so a day in progress only earns credit once it has passed a whole usual day.
 """
 
 import statistics
@@ -22,6 +25,7 @@ from gwc.analysis.food_day import FoodDays
 from gwc.db.models import Activity, DailySummary
 
 EAT_BACK_PREF = "targets.exercise_eat_back_pct"
+STEPS_PREF = "targets.steps_eat_back_pct"
 SECONDS_PER_DAY = 86_400
 
 
@@ -110,3 +114,20 @@ def net_by_calendar_date(s: Session, tz: ZoneInfo, start: date, end: date) -> di
     for w in _load(s, tz, lo, hi):
         out[w.start_at.astimezone(tz).date()] += w.net_kcal
     return dict(out)
+
+
+def step_kcal_by_date(s: Session, tz: ZoneInfo, start: date, end: date) -> dict[date, float]:
+    """Garmin's active kcal outside workouts per local calendar date, so far for today."""
+    active = dict(
+        s.execute(
+            select(DailySummary.calendar_date, DailySummary.active_kcal).where(
+                DailySummary.calendar_date >= start,
+                DailySummary.calendar_date <= end,
+                DailySummary.active_kcal.is_not(None),
+            )
+        ).all()
+    )
+    if not active:
+        return {}
+    workouts = net_by_calendar_date(s, tz, start, end)
+    return {d: max(0.0, kcal - workouts.get(d, 0.0)) for d, kcal in active.items()}

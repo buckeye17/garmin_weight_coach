@@ -311,12 +311,15 @@ def _ring_stat(label: str, value: str, note: str | None = None) -> dmc.Stack:
     )
 
 
-def _workout_note(plan: TargetPlan) -> str | None:
-    """E.g. "2,100 base + 380 workouts": what the day's workouts add on top of base."""
+def _activity_note(plan: TargetPlan) -> str | None:
+    """E.g. "2,100 base + 380 workouts + 40 steps": what the day's activity adds to base."""
     base = plan.base_values.get("kcal")
     if base is None or plan.eat_back_pct is None:
         return None
-    return f"{base:,.0f} base + {plan.workout_kcal:,.0f} workouts"
+    note = f"{base:,.0f} base + {plan.workout_kcal:,.0f} workouts"
+    if plan.step_pct is not None:
+        note += f" + {plan.step_credit_kcal:,.0f} steps"
+    return note
 
 
 def _calorie_ring(
@@ -345,7 +348,7 @@ def _calorie_ring(
     # A zero-width section still draws a round-cap dot, so leave the ring empty.
     sections = [{"value": min(100.0, 100 * eaten / target), "color": color}] if eaten else []
     stats += [
-        _ring_stat("Target", f"{target:,.0f} kcal", _workout_note(plan)),
+        _ring_stat("Target", f"{target:,.0f} kcal", _activity_note(plan)),
         _ring_stat("Entries", f"{n_entries}"),
     ]
     return sections, label, stats

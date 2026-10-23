@@ -2,6 +2,7 @@ from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
+from sqlalchemy import select
 
 from fakes import utc
 from gwc.analysis import energy, targets
@@ -30,7 +31,7 @@ from gwc.db.models import (
 from gwc.db.session import session_scope
 from gwc.nutrition import log
 from gwc.prefs import set_pref
-from gwc.web.components.analysis_text import plan_summary, workout_summary
+from gwc.web.components.analysis_text import plan_summary, step_summary, workout_summary
 
 NY = ZoneInfo("America/New_York")
 D0 = date(2026, 10, 1)
@@ -135,6 +136,32 @@ def test_garmin_tdee_base_leaves_out_workouts():
     est = garmin_tdee(days)
     assert est.kcal == 3000 and est.exercise_kcal == pytest.approx(100)
     assert est.base_kcal == pytest.approx(2900)
+
+
+def test_garmin_tdee_base_leaves_out_above_usual_steps():
+    active = [300, 300, 300, 800, 300, 600, 900]
+    exercise = [0, 0, 0, 500, 0, 0, 0]  # day 3's 800 is mostly a workout
+    days = [
+        rec(i, garmin=3000, garmin_active=a, garmin_exercise=e)
+        for i, (a, e) in enumerate(zip(active, exercise, strict=True))
+    ]
+    est = garmin_tdee(days)
+    # Outside workouts: 300 ×5, 600, 900 → usual 300 (median), 900/7 above it on average.
+    assert est.typical_step_kcal == 300
+    assert est.step_kcal == pytest.approx(900 / 7)
+    assert est.base_kcal == pytest.approx(3000 - 500 / 7 - 900 / 7)
+    # Too few days to know what's usual: no step adjustment either way.
+    short = garmin_tdee(days[:2])
+    assert short.typical_step_kcal is None and short.base_kcal == pytest.approx(3000)
+
+
+def test_step_credit_is_a_share_above_usual_rounded_down():
+    assert targets.step_credit(50, 300, 385) == 40  # 42.5 → 40
+    assert targets.step_credit(50, 300, 250) == 0  # a quiet day takes nothing away
+    assert targets.step_credit(0, 300, 900) == 0
+    assert targets.step_credit(None, 300, 900) == 0
+    assert targets.step_credit(50, None, 900) == 0
+    assert targets.step_credit(50, 300, None) == 0
 
 
 def _losing(days: int, intake: float, kg_per_day: float, start: float = 120):
@@ -493,11 +520,46 @@ def test_workouts_add_on_top_of_overrides(db):
     assert plan.values["carbs_g"] == plan.base_values["carbs_g"] + 125
 
 
+def test_steps_above_usual_raise_todays_targets(db):
+    today = date(2026, 10, 20)
+    with session_scope() as s:
+        _seed(s)
+        s.flush()
+        rows = s.scalars(select(DailySummary).order_by(DailySummary.calendar_date)).all()
+        for i, row in enumerate(rows):
+            row.active_kcal = 1100 if i in (2, 9, 16) else 800
+    with session_scope() as s:
+        snap = build_snapshot(s, NY, NOW)
+        assert snap.chosen.typical_step_kcal == 800
+        assert snap.chosen.step_kcal == pytest.approx(900 / 21)
+        before = targets.day_targets(s, NY, NOW, today, snap=snap)
+        assert before.step_kcal_today is None and before.step_credit_kcal == 0
+        assert before.tdee_kcal == pytest.approx(snap.chosen.kcal - 900 / 21)
+        assert before.typical_kcal == pytest.approx(before.values["kcal"] + 0.5 * 900 / 21)
+    with session_scope() as s:
+        # Garmin's running total for today, synced mid-afternoon: 200 above a usual day.
+        s.add(
+            DailySummary(
+                calendar_date=today, active_kcal=1000, resting_kcal=1200, is_provisional=True
+            )
+        )
+    with session_scope() as s:
+        after = targets.day_targets(s, NY, NOW, today)
+        assert after.step_kcal_today == 1000
+        assert after.step_credit_kcal == 100  # 50 % of 200
+        assert after.values["kcal"] == before.values["kcal"] + 100
+        assert targets.frozen_targets(s, NY, today, today) == {today: after.values["kcal"]}
+    assert step_summary(after).startswith("+100 kcal for extra steps: 50% of 200 kcal above")
+    summary = plan_summary(after, "lb")
+    assert "without extra steps" in summary and "Total" in summary
+
+
 def test_days_recorded_before_workouts_get_no_adjustment(db):
     today = date(2026, 10, 20)
     with session_scope() as s:
         _seed(s)
         _workout(s, NOW - timedelta(hours=2), 600, 60)
+        s.add(DailySummary(calendar_date=today, active_kcal=2000, is_provisional=True))
         values = dict(kcal=2800, protein_g=150, carbs_g=300, fat_g=80, fiber_g=40)
         s.add(
             DailyTarget(

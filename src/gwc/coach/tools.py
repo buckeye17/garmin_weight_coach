@@ -78,7 +78,9 @@ def get_overview(_args: dict[str, Any]) -> dict[str, Any]:
             "ready": e.ready,
             "note": e.note,
             "workouts_kcal_per_day": _r(e.exercise_kcal, 0),
-            "without_workouts_kcal_per_day": _r(e.base_kcal, 0),
+            "usual_step_kcal_per_day": _r(e.typical_step_kcal, 0),
+            "steps_above_usual_kcal_per_day": _r(e.step_kcal, 0),
+            "without_workouts_or_extra_steps_kcal_per_day": _r(e.base_kcal, 0),
         }
         for e in (snap.garmin, snap.adaptive)
     }
@@ -222,10 +224,15 @@ def get_targets(args: dict[str, Any]) -> dict[str, Any]:
         "burn_method": plan.tdee_method,
         "burn_kcal": _r(plan.tdee_kcal, 0),
         "burn_excludes_workouts": plan.eat_back_pct is not None,
-        "targets_before_workouts": {k: _r(v, 0) for k, v in plan.base_values.items()},
+        "burn_excludes_extra_steps": plan.step_pct is not None,
+        "targets_before_workouts_and_steps": {k: _r(v, 0) for k, v in plan.base_values.items()},
         "workout_kcal_added": _r(plan.workout_kcal, 0),
         "workout_eat_back_pct": plan.eat_back_pct,
         "workouts": [w.as_dict() for w in plan.workouts],
+        "step_kcal_added": _r(plan.step_credit_kcal, 0),
+        "steps_eat_back_pct": plan.step_pct,
+        "active_kcal_outside_workouts": _r(plan.step_kcal_today, 0),
+        "usual_active_kcal_outside_workouts": _r(plan.typical_step_kcal, 0),
         "deficit_kcal": _r(plan.deficit_kcal, 0),
         "goal_loss_per_month": _w(plan.goal_kg_per_month),
         "achievable_loss_per_month": _w(plan.effective_kg_per_month),
@@ -473,7 +480,7 @@ def data_tools() -> list[ToolSpec]:
             "get_targets",
             "Nutrient targets for a food day: final values, the suggestions, which are manual "
             "overrides, the burn and deficit behind calories, guardrail flags, and the "
-            "calories added for that day's Garmin workouts.",
+            "calories added for that day's Garmin workouts and above-usual steps.",
             day_schema,
             get_targets,
             lambda _a: "Checking your targets…",

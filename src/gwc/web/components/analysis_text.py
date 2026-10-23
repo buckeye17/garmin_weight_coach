@@ -18,10 +18,11 @@ def fmt_kcal(value: float | None) -> str:
 
 
 def plan_summary(plan: t.TargetPlan, unit: WeightUnit) -> str:
-    """Where a day's calorie target came from, including its workouts."""
-    base = _base_summary(plan, unit)
-    extra = workout_summary(plan)
-    return f"{base} {extra}" if extra else base
+    """Where a day's calorie target came from, including its workouts and steps."""
+    parts = [_base_summary(plan, unit), workout_summary(plan), step_summary(plan)]
+    if plan.values.get("kcal") is not None and (plan.workout_kcal or plan.step_credit_kcal):
+        parts.append(f"Total {plan.values['kcal']:,.0f} kcal.")
+    return " ".join(p for p in parts if p)
 
 
 def _base_summary(plan: t.TargetPlan, unit: WeightUnit) -> str:
@@ -33,8 +34,13 @@ def _base_summary(plan: t.TargetPlan, unit: WeightUnit) -> str:
     if plan.tdee_kcal is None or plan.deficit_kcal is None:
         return f"{kcal:,.0f} kcal."
     source = METHOD_LABELS.get(plan.tdee_method or "", "burn")
+    left_out = []
     if plan.eat_back_pct is not None and plan.workout_avg_kcal:
-        source += " without workouts"
+        left_out.append("workouts")
+    if plan.step_pct is not None and plan.step_avg_kcal:
+        left_out.append("extra steps")
+    if left_out:
+        source += " without " + " or ".join(left_out)
     if t.NO_GOAL in plan.flags:
         return f"{kcal:,.0f} kcal: maintenance at your {source} (no goal set)."
     sign = "−" if plan.deficit_kcal >= 0 else "+"
@@ -45,7 +51,7 @@ def _base_summary(plan: t.TargetPlan, unit: WeightUnit) -> str:
 
 
 def workout_summary(plan: t.TargetPlan) -> str:
-    """E.g. "+380 kcal for Run (60 min): 75% of 504 kcal above resting. Total 3,540 kcal." """
+    """E.g. "+380 kcal for Run (60 min): 75% of 504 kcal above resting." """
     if not plan.workout_kcal or plan.values.get("kcal") is None:
         return ""
     ws = plan.workouts
@@ -57,7 +63,19 @@ def workout_summary(plan: t.TargetPlan) -> str:
     net = sum(w.net_kcal for w in ws)
     return (
         f"+{plan.workout_kcal:,.0f} kcal for {what}: {plan.eat_back_pct:,.0f}% of "
-        f"{net:,.0f} kcal above resting. Total {plan.values['kcal']:,.0f} kcal."
+        f"{net:,.0f} kcal above resting."
+    )
+
+
+def step_summary(plan: t.TargetPlan) -> str:
+    """E.g. "+40 kcal for extra steps: 50% of 85 kcal above your usual 335." """
+    if not plan.step_credit_kcal or plan.values.get("kcal") is None:
+        return ""
+    above = (plan.step_kcal_today or 0.0) - (plan.typical_step_kcal or 0.0)
+    return (
+        f"+{plan.step_credit_kcal:,.0f} kcal for extra steps: {plan.step_pct:,.0f}% of "
+        f"{above:,.0f} kcal above your usual {plan.typical_step_kcal:,.0f} active kcal "
+        "outside workouts."
     )
 
 
@@ -84,9 +102,14 @@ def tdee_line(est: TdeeEstimate) -> str:
     if not est.ready or est.kcal is None:
         return est.note
     line = f"{est.kcal:,.0f} ± {est.se or 0:,.0f} kcal/day. {est.note}"
+    extras = []
     if est.exercise_kcal:
+        extras.append(f"workouts {est.exercise_kcal:,.0f}")
+    if est.step_kcal:
+        extras.append(f"steps above your usual {est.step_kcal:,.0f}")
+    if extras:
         line += (
-            f" Workouts average {est.exercise_kcal:,.0f} kcal/day of that; targets start "
-            f"from {est.base_kcal:,.0f} and add each day's own workouts."
+            f" Of that, {' and '.join(extras)} kcal/day; targets start from "
+            f"{est.base_kcal:,.0f} and add each day's own."
         )
     return line

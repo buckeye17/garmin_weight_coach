@@ -10,6 +10,12 @@
 Both include whatever workouts you did. `exercise_kcal` is the average net
 workout burn over the same days, and `base_kcal` is the estimate without it:
 targets start from the base and add each day's own workouts (exercise.py).
+
+Steps likewise: `typical_step_kcal` is the median of Garmin's active kcal outside
+workouts on the same days, and `step_kcal` the average amount above it. The base
+leaves that out too, so a day that walks more than usual is credited on its own
+day (targets.py) instead of again through the next week's average. Using the
+median keeps one big day from raising "usual", which errs toward eating less.
 """
 
 import math
@@ -27,6 +33,8 @@ GARMIN_SYSTEMATIC_PCT = 0.05
 ADAPTIVE_MIN_SPAN_DAYS = 14
 ADAPTIVE_MIN_COMPLETE_DAYS = 10
 ADAPTIVE_MIN_WEIGHINS = 4
+# Days with Garmin active kcal needed before steps are judged against "usual".
+MIN_STEP_DAYS = 3
 
 
 @dataclass(frozen=True)
@@ -41,13 +49,15 @@ class TdeeEstimate:
     intake_kcal: float | None = None  # adaptive only: mean intake on complete days
     slope_kg_per_week: float | None = None  # adaptive only
     exercise_kcal: float | None = None  # mean net workout kcal/day over the same days
+    typical_step_kcal: float | None = None  # median active kcal/day outside workouts
+    step_kcal: float | None = None  # mean active kcal/day above that
 
     @property
     def base_kcal(self) -> float | None:
-        """Burn without workouts."""
+        """Burn without workouts or above-usual steps."""
         if self.kcal is None:
             return None
-        return self.kcal - (self.exercise_kcal or 0.0)
+        return self.kcal - (self.exercise_kcal or 0.0) - (self.step_kcal or 0.0)
 
     @property
     def label(self) -> str:
@@ -56,6 +66,18 @@ class TdeeEstimate:
 
 def _sd(values: list[float]) -> float:
     return statistics.stdev(values) if len(values) > 1 else 0.0
+
+
+def step_stats(days: list[DayRecord]) -> dict[str, float | None]:
+    """Usual (median) active kcal outside workouts, and the mean amount above it."""
+    values = [d.step_kcal for d in days if d.has_garmin and d.step_kcal is not None]
+    if len(values) < MIN_STEP_DAYS:
+        return {"typical_step_kcal": None, "step_kcal": None}
+    typical = statistics.median(values)
+    return {
+        "typical_step_kcal": typical,
+        "step_kcal": statistics.fmean(max(0.0, v - typical) for v in values),
+    }
 
 
 def garmin_tdee(ended: list[DayRecord], n: int = GARMIN_DAYS) -> TdeeEstimate:
@@ -76,6 +98,7 @@ def garmin_tdee(ended: list[DayRecord], n: int = GARMIN_DAYS) -> TdeeEstimate:
         days_used=len(days),
         resting_kcal=statistics.fmean(resting) if resting else None,
         exercise_kcal=statistics.fmean(d.garmin_exercise for d in days),
+        **step_stats(days),
     )
 
 
@@ -136,6 +159,7 @@ def adaptive_tdee(
         intake_kcal=intake,
         slope_kg_per_week=slope * 7,
         exercise_kcal=statistics.fmean(d.garmin_exercise for d in days),
+        **step_stats(days),
     )
 
 

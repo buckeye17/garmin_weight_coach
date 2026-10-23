@@ -40,6 +40,13 @@ class DayRecord:
     def has_garmin(self) -> bool:
         return self.garmin_total is not None and not self.garmin_provisional
 
+    @property
+    def step_kcal(self) -> float | None:
+        """Garmin's active kcal outside workouts: mostly steps."""
+        if self.garmin_active is None:
+            return None
+        return max(0.0, self.garmin_active - self.garmin_exercise)
+
 
 def load_days(s: Session, tz: ZoneInfo, start: date, end: date) -> list[DayRecord]:
     """One record per food day from `start` through `end`, oldest first.
