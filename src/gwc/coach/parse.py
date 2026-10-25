@@ -9,6 +9,10 @@ published numbers come back as Claude's own estimate, editable in the review
 table. Nothing is saved until the user confirms; confirmed restaurant items
 (published, or typed in by the user) become the user's own foods, so the next
 order is found without the web.
+
+A photo of the plate can come with the description (or instead of it), for
+places with no published nutrition. Claude itemizes what it sees; with no
+record behind them those rows are estimates, and they aren't saved as foods.
 """
 
 from datetime import datetime
@@ -20,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from gwc.coach import prompts
 from gwc.coach.jobs import Job
+from gwc.coach.label import image_from_data_url
 from gwc.coach.llm import LLMRequest, get_backend
 from gwc.coach.settings import feature_config
 from gwc.coach.tools import FoodLookup
@@ -87,7 +92,8 @@ ITEMS_SCHEMA: dict[str, Any] = {
                 "properties": {
                     "description": {
                         "type": "string",
-                        "description": "The item as the user described it, e.g. '2 scrambled eggs'",
+                        "description": "The item as the user described it (or as seen in "
+                        "the photo), e.g. '2 scrambled eggs'",
                     },
                     "source": {
                         "type": "string",
@@ -236,15 +242,24 @@ def item_nutrients(row: dict[str, Any], grams: float | None = None) -> dict[str,
     return scale(per100, row["grams"] if grams is None else grams)
 
 
-def parse_description(text: str, tz: ZoneInfo, now: datetime, job: Job | None = None) -> dict:
-    """Run Claude over `text`; returns {"items": [...review rows], "message": str | None}."""
+def parse_description(
+    text: str, tz: ZoneInfo, now: datetime, job: Job | None = None, photo: str | None = None
+) -> dict:
+    """Run Claude over `text` and an optional plate `photo` (a data: URL).
+
+    Returns {"items": [...review rows], "message": str | None, "model": str}.
+    """
     from gwc.db.session import session_scope
 
     lookup = FoodLookup()
     local = now.astimezone(tz)
+    images = [image_from_data_url(photo)] if photo else []
+    what = text.strip() or "(nothing typed: itemize the photo)"
     prompt = (
         f"Current local time: {local:%A %Y-%m-%d %H:%M}. Country for restaurant menus: "
-        f"{get_pref('food.country')}.\n\nWhat I ate:\n{text.strip()}"
+        f"{get_pref('food.country')}.\n\n"
+        + ("A photo of my plate is attached.\n\n" if images else "")
+        + f"What I ate:\n{what}"
     )
     req = LLMRequest(
         system=prompts.FOOD_PARSER,
@@ -254,11 +269,14 @@ def parse_description(text: str, tz: ZoneInfo, now: datetime, job: Job | None = 
         output_schema=ITEMS_SCHEMA,
         on_activity=job.on_activity if job else None,
         web=True,  # chain-restaurant items are looked up on the chain's site
+        images=images,
     )
     result = get_backend().run(req)
     data = result.data or {}
     with session_scope() as s:
         items = resolve_items(s, data.get("items") or [], lookup, tz, now)
+    for row in items:
+        row["photo"] = bool(images)
     return {"items": items, "message": data.get("message"), "model": result.model}
 
 
@@ -315,7 +333,9 @@ def confirm_items(s: Session, rows: list[dict[str, Any]], tz: ZoneInfo) -> int:
         totals = row.get("totals") or item_nutrients(row, grams)
         eaten_at = datetime.fromisoformat(row["eaten_at"])
         label = row.get("amount_label") or f"{grams:.0f} g"
-        note = f"From: {row['description']}" if row.get("description") else None
+        note = None
+        if row.get("description"):
+            note = f"From{' photo' if row.get('photo') else ''}: {row['description']}"
         food_id = row.get("food_id")
         if row.get("hit"):
             hit = UsdaHit.from_dict(row["hit"])

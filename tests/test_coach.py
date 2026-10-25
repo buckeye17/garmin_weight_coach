@@ -614,6 +614,62 @@ def test_parse_restaurant_items(db, usda):
     assert hit["brand"] == "Chipotle" and hit["source_url"].endswith("nutrition-calculator")
 
 
+def test_parse_plate_photo(db, usda):
+    from gwc.coach.llm import ImageInput
+
+    def respond(req):
+        assert "photo of my plate" in req.messages[0]["content"]
+        assert "itemize the photo" in req.messages[0]["content"]  # nothing was typed
+        item = {"food_id": None, "fdc_id": None, "eaten_at": None, "restaurant": None}
+        return LLMResult(
+            text="",
+            data={
+                "items": [
+                    {
+                        **item,
+                        "description": "pad thai",
+                        "source": "estimate",
+                        "amount_label": "1 plate",
+                        "grams": 450,
+                        "estimate": {**BOWL, "kcal": 900},
+                    },
+                    {
+                        **item,
+                        "description": "cooking oil (est.)",
+                        "source": "estimate",
+                        "amount_label": "1 tbsp",
+                        "grams": 14,
+                        "estimate": {**dict.fromkeys(BOWL, 0), "kcal": 120, "fat_g": 14},
+                    },
+                ],
+                "message": "Sized by the dinner plate.",
+            },
+        )
+
+    backend = use_backend(respond)
+    out = parse.parse_description("  ", NY, NOW, photo="data:image/jpeg;base64,/9j/AAAA")
+    (req,) = backend.requests
+    assert req.images == [ImageInput("image/jpeg", "/9j/AAAA")]
+    assert all(row["photo"] and row["editable"] for row in out["items"])
+    with session_scope() as s:
+        assert parse.confirm_items(s, out["items"], NY) == 2
+    with session_scope() as s:
+        rows = s.query(FoodLog).order_by(FoodLog.id).all()
+        assert [r.kcal for r in rows] == pytest.approx([900, 120])
+        assert rows[0].note == "Estimated by Claude · From photo: pad thai"
+        assert rows[0].food_id is None and s.query(Food).count() == 0  # not saved as foods
+
+    with pytest.raises(LLMError):
+        parse.parse_description("lunch", NY, NOW, photo="data:application/pdf;base64,AAAA")
+    assert len(backend.requests) == 1  # a bad file never reaches Claude
+
+    # Without a photo, nothing about one is said or sent.
+    use_backend(lambda req: LLMResult(text="", data={"items": [], "message": None}))
+    parse.parse_description("lunch", NY, NOW)
+    req = llm.get_backend().requests[0]
+    assert req.images == [] and "photo" not in req.messages[0]["content"]
+
+
 def test_parse_handles_empty_result(db, usda):
     use_backend(lambda req: LLMResult(text="", data=None))
     assert parse.parse_description("nothing", NY, NOW)["items"] == []

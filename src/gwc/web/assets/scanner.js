@@ -1,12 +1,13 @@
 /*
- * Barcode scanning and label photos (Add food's Scan tab, the recipe builder).
+ * Barcode scanning and photos (Add food's Scan and Describe tabs, the recipe builder).
  *
  * Scanning uses the browser's built-in BarcodeDetector (Chrome on Android), over a
  * full-screen camera view drawn outside Dash. A code is accepted once it reads the
  * same twice in a row, then written to a store: `scan-code` unless the caller names
  * another with open({code, msg}). Problems go to the `msg` text (`scan-js-msg`).
- * Label photos are downscaled here (Claude reads at most ~1568 px) and written to
- * `label-photo`.
+ * Photos are downscaled here (Claude reads at most ~1568 px) and written to a store:
+ * `label-photo` (taken with the camera), unless pickPhoto({store, msg, camera})
+ * names another. Plate photos pass camera: false so one taken earlier can be picked.
  */
 (function () {
   "use strict";
@@ -16,10 +17,12 @@
   const PHOTO_MAX_EDGE = 1568;
 
   const DEFAULT_TARGET = { code: "scan-code", msg: "scan-js-msg" };
+  const DEFAULT_PHOTO = { store: "label-photo", msg: "scan-js-msg", camera: true };
 
   let session = null; // {overlay, stream, track, running, target}
   let target = DEFAULT_TARGET;
   let photoInput = null;
+  let photoTarget = DEFAULT_PHOTO;
 
   function setProps(id, props) {
     if (window.dash_clientside && window.dash_clientside.set_props) {
@@ -207,7 +210,7 @@
     });
   }
 
-  // ------------------------------------------------------------------ label photos
+  // ------------------------------------------------------------------ photos
 
   async function downscale(file) {
     let source;
@@ -231,14 +234,13 @@
     return canvas.toDataURL("image/jpeg", 0.88);
   }
 
-  function pickPhoto() {
-    target = DEFAULT_TARGET;
-    message("");
+  function pickPhoto(opts) {
+    photoTarget = Object.assign({}, DEFAULT_PHOTO, opts || {});
+    setProps(photoTarget.msg, { children: "" });
     if (!photoInput) {
       photoInput = document.createElement("input");
       photoInput.type = "file";
       photoInput.accept = "image/*";
-      photoInput.setAttribute("capture", "environment");
       photoInput.hidden = true;
       photoInput.addEventListener("change", async () => {
         const file = photoInput.files && photoInput.files[0];
@@ -246,12 +248,17 @@
         if (!file) return;
         try {
           const image = await downscale(file);
-          setProps("label-photo", { data: { image, nonce: Date.now() } });
+          setProps(photoTarget.store, { data: { image, nonce: Date.now() } });
         } catch (e) {
-          message("Couldn't open that photo. Try taking it again.");
+          setProps(photoTarget.msg, { children: "Couldn't open that photo. Try taking it again." });
         }
       });
       document.body.appendChild(photoInput);
+    }
+    if (photoTarget.camera) {
+      photoInput.setAttribute("capture", "environment");
+    } else {
+      photoInput.removeAttribute("capture");
     }
     photoInput.click();
   }

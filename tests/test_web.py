@@ -1,3 +1,5 @@
+from types import SimpleNamespace as NS
+
 import dash
 import pytest
 
@@ -345,8 +347,8 @@ def test_ai_review_callbacks(app, isolated_settings, monkeypatch):
     out = ai_log.confirm(
         1, None, [150, 500], included, nuts, gram_ids, include_ids, nut_ids, data, 0
     )
-    assert out[0] is None and out[4] == 1
-    assert out[2] == (
+    assert out[0] is None and out[2] is None and out[5] == 1  # text and photo cleared
+    assert out[3] == (
         "Logged 4 items from your description. Saved 2 restaurant items to your foods."
     )
     with session_scope() as s:
@@ -359,3 +361,14 @@ def test_ai_review_callbacks(app, isolated_settings, monkeypatch):
         assert set(saved) == {rest["item"], "Mystery Wrap"}
         assert saved[rest["item"]].source_url == rest["source_url"]
         assert saved["Mystery Wrap"].source_url is None
+
+
+def test_ai_parse_needs_text_or_photo(app, monkeypatch):
+    from gwc.web.components import ai_log
+
+    started = []
+    jobs = type("Jobs", (), {"start": lambda self, kind, fn: started.append(kind) or NS(id="j")})
+    monkeypatch.setattr(ai_log, "get_jobs", lambda: jobs())
+    assert "add a photo" in str(ai_log.start_parse(1, "  ", None)[4]) and not started
+    out = ai_log.start_parse(1, "", {"image": "data:image/jpeg;base64,/9j/AAAA"})
+    assert out[0] == "j" and out[3] == "Looking at your photo…" and started == ["parse"]

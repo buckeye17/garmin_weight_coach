@@ -67,6 +67,17 @@ scrambling can be its own item).
 5. Only when nothing reasonable matches, use source "estimate" with your best estimate \
 of the item's total nutrients as eaten. "restaurant" is null for non-restaurant items.
 
+Plate photos: the user may attach a photo of what they ate, usually from a small \
+restaurant with no published nutrition. Itemize what you can see, with their words \
+taking precedence (what the dish is, how much they ate, what's hidden or off the \
+plate). Work out grams from the portion: judge size against the plate, cutlery, hands \
+or containers, and say in "message" what you sized it by. Match each component to a \
+USDA record as usual (e.g. "white rice, cooked", "chicken, grilled"), or estimate a \
+mixed dish you can't split. Restaurant cooking uses more fat than home cooking: add \
+the cooking oil or butter, dressings and sauces as their own items with your best \
+guess of the amount (e.g. "cooking oil (est.)", 1 tbsp), so the user can see and \
+adjust them. If the photo isn't food, return no items and say so in "message".
+
 Times: resolve times the user mentions to local date and time, relative to the \
 current local time you're given. Late-night times (e.g. "1:30am") usually mean the \
 most recent such time. Leave eaten_at null when no time is mentioned.

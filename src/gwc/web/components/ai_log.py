@@ -3,13 +3,17 @@
 Rows matched to a record (the user's foods, USDA, a chain's published nutrition)
 scale with the grams input. Rows without one (Claude's estimates, restaurant items
 it couldn't find) show their nutrients as inputs for the amount eaten instead.
+
+A plate photo can go with the description. assets/scanner.js downscales it into
+`ai-photo`; the preview and its remove button are clientside, so the image only
+goes to the server when Itemize is pressed.
 """
 
 from datetime import datetime
 from urllib.parse import urlparse
 
 import dash_mantine_components as dmc
-from dash import ALL, Input, Output, State, callback, ctx, dcc, no_update
+from dash import ALL, Input, Output, State, callback, clientside_callback, ctx, dcc, no_update
 from dash.exceptions import PreventUpdate
 
 from gwc.analysis.food_day import current_food_day
@@ -43,18 +47,41 @@ def ai_panel() -> dmc.Stack:
             ),
             dmc.Group(
                 [
-                    dmc.Text(
-                        "Claude matches each item to your foods or USDA, and looks up chain "
-                        "restaurant items on the chain's site. Nothing is saved until you "
-                        "confirm.",
+                    dmc.Image(id="ai-photo-img", h=72, w="auto", radius="sm"),
+                    dmc.Button(
+                        "Remove photo",
+                        id="ai-photo-clear",
+                        variant="subtle",
+                        color="gray",
                         size="xs",
-                        c="dimmed",
-                        flex=1,
+                        leftSection=icon("tabler:x", 14),
+                    ),
+                ],
+                id="ai-photo-preview",
+                gap="xs",
+                display="none",
+            ),
+            dmc.Text(id="ai-photo-msg", size="sm", c="orange"),
+            dmc.Text(
+                "Claude matches each item to your foods or USDA, and looks up chain restaurant "
+                "items on the chain's site. For a place without published nutrition, add a "
+                "photo of your plate, and say what it is and how much you ate. Nothing is "
+                "saved until you confirm.",
+                size="xs",
+                c="dimmed",
+            ),
+            dmc.Group(
+                [
+                    dmc.Button(
+                        "Add photo",
+                        id="ai-photo-open",
+                        variant="default",
+                        leftSection=icon("tabler:camera", 16),
                     ),
                     dmc.Button("Itemize", id="ai-go", leftSection=icon("tabler:sparkles", 16)),
                 ],
-                wrap="nowrap",
-                align="flex-start",
+                justify="flex-end",
+                gap="xs",
             ),
             dmc.Group(
                 [dmc.Loader(size="xs"), dmc.Text(id="ai-activity", size="sm", c="dimmed")],
@@ -81,6 +108,8 @@ def ai_panel() -> dmc.Stack:
             ),
             dcc.Store(id="ai-job"),
             dcc.Store(id="ai-items"),
+            dcc.Store(id="ai-photo"),  # {"image": data URL, "nonce"}
+            dcc.Store(id="ai-photo-js"),
             dcc.Interval(id="ai-poll", interval=POLL_MS, disabled=True),
         ],
         gap="sm",
@@ -207,6 +236,31 @@ def _item_card(row: dict, food_day) -> dmc.Paper:
     return dmc.Paper(dmc.Stack(children, gap=4), p="xs", withBorder=True)
 
 
+clientside_callback(
+    "function (n) { if (n) { window.gwcScanner.pickPhoto("
+    "{store: 'ai-photo', msg: 'ai-photo-msg', camera: false}); }"
+    " return window.dash_clientside.no_update; }",
+    Output("ai-photo-js", "data"),
+    Input("ai-photo-open", "n_clicks"),
+    prevent_initial_call=True,
+)
+
+clientside_callback(
+    "function (photo) { const src = photo && photo.image;"
+    " return [src || null, src ? 'flex' : 'none']; }",
+    Output("ai-photo-img", "src"),
+    Output("ai-photo-preview", "display"),
+    Input("ai-photo", "data"),
+)
+
+clientside_callback(
+    "function (n) { return n ? null : window.dash_clientside.no_update; }",
+    Output("ai-photo", "data", allow_duplicate=True),
+    Input("ai-photo-clear", "n_clicks"),
+    prevent_initial_call=True,
+)
+
+
 @callback(
     Output("ai-job", "data"),
     Output("ai-poll", "disabled"),
@@ -216,21 +270,25 @@ def _item_card(row: dict, food_day) -> dmc.Paper:
     Output("ai-items", "data", allow_duplicate=True),
     Input("ai-go", "n_clicks"),
     State("ai-text", "value"),
+    State("ai-photo", "data"),
     prevent_initial_call=True,
 )
-def start_parse(_clicks, text):
-    if not text or not text.strip():
+def start_parse(_clicks, text, photo):
+    text = (text or "").strip()
+    image = (photo or {}).get("image")
+    if not text and not image:
         return (
             no_update,
             True,
             "none",
             "",
-            dmc.Text("Describe what you ate first.", size="sm"),
+            dmc.Text("Describe what you ate, or add a photo of it, first.", size="sm"),
             None,
         )
     zone, at = tz(), now()
-    job = get_jobs().start("parse", lambda j: parse_description(text, zone, at, j))
-    return job.id, False, "flex", "Reading your description…", None, None
+    job = get_jobs().start("parse", lambda j: parse_description(text, zone, at, j, image))
+    activity = "Looking at your photo…" if image else "Reading your description…"
+    return job.id, False, "flex", activity, None, None
 
 
 @callback(
@@ -353,6 +411,7 @@ def update_totals(grams, included, nuts, gram_ids, include_ids, nut_ids, data):
 @callback(
     Output("ai-items", "data", allow_duplicate=True),
     Output("ai-text", "value"),
+    Output("ai-photo", "data", allow_duplicate=True),
     Output("logm-result", "children", allow_duplicate=True),
     Output("logm-result", "display", allow_duplicate=True),
     Output("logm-done", "data", allow_duplicate=True),
@@ -373,7 +432,7 @@ def confirm(_ok, _discard, grams, included, nuts, gram_ids, include_ids, nut_ids
     if not data:
         raise PreventUpdate
     if ctx.triggered_id == "ai-discard":
-        return None, no_update, no_update, no_update, no_update, None
+        return None, no_update, no_update, no_update, no_update, no_update, None
     chosen = _chosen(data, grams, gram_ids, included, include_ids, nuts, nut_ids)
     try:
         with session_scope() as s:
@@ -385,10 +444,12 @@ def confirm(_ok, _discard, grams, included, nuts, gram_ids, include_ids, nut_ids
             no_update,
             no_update,
             no_update,
+            no_update,
             dmc.Alert(f"Couldn't log: {e}", color="red", variant="light"),
         )
     saved = sum(1 for r in chosen if saves_food(r))
-    message = f"Logged {count} item{'s' * (count != 1)} from your description."
+    source = "photo" if any(r.get("photo") for r in chosen) else "description"
+    message = f"Logged {count} item{'s' * (count != 1)} from your {source}."
     if saved:
         message += f" Saved {saved} restaurant item{'s' * (saved != 1)} to your foods."
-    return None, "", message, "block", (done or 0) + 1, None
+    return None, "", None, message, "block", (done or 0) + 1, None
