@@ -239,7 +239,19 @@ def layout(**_kwargs):
                             dmc.Card(
                                 dmc.Stack(
                                     [
-                                        dmc.Title("Entries", order=5),
+                                        dmc.Group(
+                                            [
+                                                dmc.Title("Entries", order=5),
+                                                dmc.Text(
+                                                    "Tap one to change its amount or time",
+                                                    size="xs",
+                                                    c="dimmed",
+                                                ),
+                                            ],
+                                            justify="space-between",
+                                            align="baseline",
+                                            gap="xs",
+                                        ),
                                         dmc.Stack(id="day-entries", gap="xs"),
                                     ],
                                     gap="xs",

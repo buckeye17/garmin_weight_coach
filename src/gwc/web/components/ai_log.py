@@ -16,12 +16,18 @@ import dash_mantine_components as dmc
 from dash import ALL, Input, Output, State, callback, clientside_callback, ctx, dcc, no_update
 from dash.exceptions import PreventUpdate
 
-from gwc.analysis.food_day import current_food_day
 from gwc.coach.jobs import get_jobs
-from gwc.coach.parse import confirm_items, item_nutrients, parse_description, saves_food
+from gwc.coach.parse import (
+    confirm_items,
+    first_eaten_at,
+    item_nutrients,
+    parse_description,
+    retime,
+    saves_food,
+)
 from gwc.db.session import session_scope
 from gwc.nutrition.nutrients import BY_KEY, NUTRIENT_KEYS
-from gwc.web.components.common import fmt_clock, icon, now, tz
+from gwc.web.components.common import from_picker, icon, now, to_picker, tz, when_inputs
 
 POLL_MS = 1000
 SOURCE_LABELS = {
@@ -91,6 +97,7 @@ def ai_panel() -> dmc.Stack:
             ),
             dmc.Box(id="ai-error"),
             dmc.Stack(id="ai-review", gap="xs"),
+            dmc.Box(when_inputs("ai"), id="ai-when", display="none"),
             dmc.Group(
                 [
                     dmc.Text(id="ai-total", size="sm", fw=600),
@@ -178,7 +185,17 @@ def _nutrient_inputs(row: dict) -> dmc.SimpleGrid:
     )
 
 
-def _item_card(row: dict, food_day) -> dmc.Paper:
+def _later(when: datetime, first: datetime) -> str | None:
+    """'45 min later', '1 h 30 min later': how long after the first item this one was eaten."""
+    minutes = round((when - first).total_seconds() / 60)
+    if minutes <= 0:
+        return None
+    hours, minutes = divmod(minutes, 60)
+    parts = ([f"{hours} h"] if hours else []) + ([f"{minutes} min"] if minutes else [])
+    return " ".join(parts) + " later"
+
+
+def _item_card(row: dict, first: datetime) -> dmc.Paper:
     source = row.get("source")
     error = row.get("error")
     not_found = row.get("editable") and not row.get("per100")
@@ -191,8 +208,8 @@ def _item_card(row: dict, food_day) -> dmc.Paper:
             size="sm",
         ),
     ]
-    when = datetime.fromisoformat(row["eaten_at"])
-    detail = f"“{row['description']}” · {row['amount_label']} · {fmt_clock(when, food_day)}"
+    later = _later(datetime.fromisoformat(row["eaten_at"]), first)
+    detail = " · ".join(x for x in (f"“{row['description']}”", row["amount_label"], later) if x)
     include = dmc.Checkbox(
         id={"type": "ai-include", "index": row["key"]},
         label="Include",
@@ -316,11 +333,14 @@ def poll_parse(_n, job_id):
 @callback(
     Output("ai-review", "children"),
     Output("ai-actions", "display"),
+    Output("ai-when", "display"),
+    Output("ai-date", "value"),
+    Output("ai-clock", "value"),
     Input("ai-items", "data"),
 )
 def render_review(data):
     if not data:
-        return [], "none"
+        return [], "none", "none", no_update, no_update
     children = []
     if data.get("message"):
         children.append(
@@ -330,11 +350,10 @@ def render_review(data):
         )
     if not data.get("items"):
         children.append(dmc.Text("Claude didn't find any foods in that.", size="sm", c="dimmed"))
-        return children, "none"
-    with session_scope() as s:
-        food_day = current_food_day(s, tz(), now())
-    children += [_item_card(row, food_day) for row in data["items"]]
-    return children, "flex"
+        return children, "none", "none", no_update, no_update
+    first = first_eaten_at(data["items"]) or now()
+    children += [_item_card(row, first) for row in data["items"]]
+    return children, "flex", "block", *to_picker(first)
 
 
 def _by_index(values, ids) -> dict:
@@ -425,15 +444,23 @@ def update_totals(grams, included, nuts, gram_ids, include_ids, nut_ids, data):
     State({"type": "ai-include", "index": ALL}, "id"),
     State({"type": "ai-nut", "index": ALL, "key": ALL}, "id"),
     State("ai-items", "data"),
+    State("ai-date", "value"),
+    State("ai-clock", "value"),
     State("logm-done", "data"),
     prevent_initial_call=True,
 )
-def confirm(_ok, _discard, grams, included, nuts, gram_ids, include_ids, nut_ids, data, done):
+def confirm(
+    _ok, _discard, grams, included, nuts, gram_ids, include_ids, nut_ids, data, day, clock, done
+):
     if not data:
         raise PreventUpdate
     if ctx.triggered_id == "ai-discard":
         return None, no_update, no_update, no_update, no_update, no_update, None
     chosen = _chosen(data, grams, gram_ids, included, include_ids, nuts, nut_ids)
+    # The "Eaten at" picker moves the whole meal; items keep their gaps from the first.
+    first = first_eaten_at(data.get("items", []))
+    if first is not None:
+        chosen = retime(chosen, first, from_picker(day, clock))
     try:
         with session_scope() as s:
             count = confirm_items(s, chosen, tz())

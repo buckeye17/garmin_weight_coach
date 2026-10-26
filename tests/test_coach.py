@@ -513,6 +513,23 @@ def test_parse_and_confirm(db, usda):
         assert rows[2].note.startswith("Estimated by Claude")
 
 
+def test_retime_moves_the_meal_and_keeps_gaps():
+    rows = [
+        {"key": 0, "eaten_at": "2026-10-20T08:15:00-04:00"},
+        {"key": 1, "eaten_at": "2026-10-20T07:30:00-04:00"},
+    ]
+    first = parse.first_eaten_at(rows)
+    assert first == datetime(2026, 10, 20, 7, 30, tzinfo=NY)
+    assert parse.first_eaten_at([]) is None
+
+    moved = parse.retime(rows, first, datetime(2026, 10, 19, 19, 0, tzinfo=NY))
+    assert [datetime.fromisoformat(r["eaten_at"]) for r in moved] == [
+        datetime(2026, 10, 19, 19, 45, tzinfo=NY),
+        datetime(2026, 10, 19, 19, 0, tzinfo=NY),
+    ]
+    assert rows[0]["eaten_at"] == "2026-10-20T08:15:00-04:00"  # input untouched
+
+
 BOWL = {
     "kcal": 650,
     "protein_g": 50,

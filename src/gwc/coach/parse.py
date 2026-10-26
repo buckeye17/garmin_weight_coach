@@ -317,6 +317,20 @@ def saves_food(row: dict[str, Any]) -> bool:
     return row.get("source") == "restaurant" or bool(row.get("edited"))
 
 
+def first_eaten_at(rows: list[dict[str, Any]]) -> datetime | None:
+    """When the earliest row was eaten; the review's "Eaten at" starts here."""
+    times = [datetime.fromisoformat(r["eaten_at"]) for r in rows if r.get("eaten_at")]
+    return min(times, default=None)
+
+
+def retime(rows: list[dict[str, Any]], first: datetime, at: datetime) -> list[dict[str, Any]]:
+    """Move the meal that started at `first` to start at `at`, keeping the gaps between items."""
+    shift = at - first
+    return [
+        {**r, "eaten_at": (datetime.fromisoformat(r["eaten_at"]) + shift).isoformat()} for r in rows
+    ]
+
+
 def confirm_items(s: Session, rows: list[dict[str, Any]], tz: ZoneInfo) -> int:
     """Log the reviewed rows; returns how many were logged.
 

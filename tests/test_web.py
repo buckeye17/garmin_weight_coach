@@ -258,6 +258,7 @@ def test_ai_review_callbacks(app, isolated_settings, monkeypatch):
     from gwc.db.models import Food, FoodLog
     from gwc.db.session import session_scope
     from gwc.web.components import ai_log
+    from gwc.web.components.common import from_picker, to_picker
 
     upgrade()
     per100 = {
@@ -321,8 +322,10 @@ def test_ai_review_callbacks(app, isolated_settings, monkeypatch):
         ],
         "message": "Check the stew portion.",
     }
-    review, display = ai_log.render_review(data)
+    review, display, when_display, day, clock = ai_log.render_review(data)
     assert display == "flex" and len(review) == 6  # message + 5 cards
+    assert when_display == "block"
+    assert (day, clock) == to_picker(datetime.fromisoformat(when))
     assert "chipotle.com" in str(review[4])  # the source link
 
     gram_ids = [{"type": "ai-grams", "index": i} for i in (0, 3)]
@@ -344,8 +347,20 @@ def test_ai_review_callbacks(app, isolated_settings, monkeypatch):
     assert ai_log.update_totals([150, 500], none, nuts, gram_ids, include_ids, nut_ids, data)[3]
 
     monkeypatch.setattr(ai_log, "ctx", type("Ctx", (), {"triggered_id": "ai-confirm"})())
+    # Logged at the time picked in the review, not the time Claude read.
     out = ai_log.confirm(
-        1, None, [150, 500], included, nuts, gram_ids, include_ids, nut_ids, data, 0
+        1,
+        None,
+        [150, 500],
+        included,
+        nuts,
+        gram_ids,
+        include_ids,
+        nut_ids,
+        data,
+        "2026-10-18",
+        "07:45",
+        0,
     )
     assert out[0] is None and out[2] is None and out[5] == 1  # text and photo cleared
     assert out[3] == (
@@ -354,6 +369,8 @@ def test_ai_review_callbacks(app, isolated_settings, monkeypatch):
     with session_scope() as s:
         logged = {r.description: r for r in s.query(FoodLog)}
         assert logged["Rice"].grams == 150 and logged["Rice"].kcal == 300
+        picked = from_picker("2026-10-18", "07:45")
+        assert all(r.eaten_at == picked for r in logged.values())
         assert logged["Stew"].kcal == 600  # an unedited estimate: logged, not saved
         assert logged["Mystery Wrap"].kcal == pytest.approx(450)
         assert logged[rest["item"]].kcal == pytest.approx(1000)
