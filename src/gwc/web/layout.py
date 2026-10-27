@@ -5,7 +5,7 @@ import dash_mantine_components as dmc
 from dash import ALL, Input, Output, callback, clientside_callback, dcc
 from dash_iconify import DashIconify
 
-from gwc.web.nav import NAV_ITEMS, is_active
+from gwc.web.nav import NAV_ITEMS, NavItem, is_active
 
 HEADER_HEIGHT = 56
 NAVBAR_WIDTH = 220
@@ -33,7 +33,19 @@ BRAND = [
 BODY_FONT = "Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
 HEADING_FONT = "'Plus Jakarta Sans', " + BODY_FONT
 
+
+def _bar_breakpoint(width: int) -> str:
+    return f"bar{width}"
+
+
+# Extra Mantine breakpoints so visibleFrom/hiddenFrom can move nav items between the bottom
+# bar and its "More" menu as the screen widens. Mantine merges these with its defaults.
+BAR_BREAKPOINTS = {
+    _bar_breakpoint(i.bar_min_width): f"{i.bar_min_width}px" for i in NAV_ITEMS if i.bar_min_width
+}
+
 THEME = {
+    "breakpoints": BAR_BREAKPOINTS,
     "primaryColor": "brand",
     "primaryShade": {"light": 7, "dark": 6},
     "colors": {"brand": BRAND},
@@ -128,24 +140,26 @@ def _navbar() -> dmc.AppShellNavbar:
 
 
 def _bottom_nav() -> dmc.Paper:
-    def tab(label: str, icon: str, href: str) -> dmc.Anchor:
+    def tab(item: NavItem) -> dmc.Anchor:
         return dmc.Anchor(
             dmc.Stack(
                 [
-                    dmc.Box(_icon(icon, 22), className="gwc-tab-icon"),
-                    dmc.Text(label, size="xs", fw=500),
+                    dmc.Box(_icon(item.icon, 22), className="gwc-tab-icon"),
+                    dmc.Text(item.label, size="xs", fw=500, className="gwc-tab-label"),
                 ],
                 gap=2,
                 align="center",
             ),
-            href=href,
-            id={"type": "bottom-nav", "href": href},
+            href=item.href,
+            id={"type": "bottom-nav", "href": item.href},
             underline="never",
             c="dimmed",
             className="gwc-tab",
+            visibleFrom=_bar_breakpoint(item.bar_min_width) if item.bar_min_width else None,
         )
 
-    primary = [tab(i.label, i.icon, i.href) for i in NAV_ITEMS if i.mobile_primary]
+    # Each item is either a bar tab or a "More" entry at any width, never both.
+    tabs = [tab(i) for i in NAV_ITEMS if i.bar_min_width is not None]
     more = dmc.Menu(
         [
             dmc.MenuTarget(
@@ -160,20 +174,29 @@ def _bottom_nav() -> dmc.Paper:
                     ),
                     c="dimmed",
                     className="gwc-tab",
-                )
+                    w="100%",
+                ),
+                # DMC wraps the target in a fit-content div; that div is the flex child.
+                boxWrapperProps={"className": "gwc-tab"},
             ),
             dmc.MenuDropdown(
                 [
-                    dmc.MenuItem(i.label, href=i.href, leftSection=_icon(i.icon, 18))
+                    dmc.MenuItem(
+                        i.label,
+                        href=i.href,
+                        leftSection=_icon(i.icon, 18),
+                        hiddenFrom=_bar_breakpoint(i.bar_min_width) if i.bar_min_width else None,
+                    )
                     for i in NAV_ITEMS
-                    if not i.mobile_primary
+                    if i.bar_min_width != 0
                 ]
             ),
         ],
         position="top-end",
     )
     return dmc.Paper(
-        dmc.Group(primary + [more], justify="space-around", h="100%", px="xs"),
+        # nowrap: a wrapped tab lands on a second row below the fixed bar, out of sight.
+        dmc.Group(tabs + [more], gap=0, wrap="nowrap", h="100%", px=4),
         hiddenFrom=MOBILE_BREAKPOINT,
         radius=0,
         h=BOTTOM_NAV_HEIGHT,

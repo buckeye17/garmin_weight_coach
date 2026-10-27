@@ -57,9 +57,14 @@ def test_is_active(href, pathname, expected):
 def test_bottom_nav_highlight():
     from gwc.web.layout import _highlight_bottom_nav
 
-    ids = [{"type": "bottom-nav", "href": i.href} for i in NAV_ITEMS if i.mobile_primary]
+    ids = [{"type": "bottom-nav", "href": i.href} for i in NAV_ITEMS if i.bar_min_width is not None]
     colors = _highlight_bottom_nav("/ask", ids)
-    assert colors == ["dimmed", "dimmed", "brand", "dimmed"]
+    assert [i["href"] for i, c in zip(ids, colors, strict=True) if c == "brand"] == ["/ask"]
+
+
+def test_more_menu_never_empty():
+    # "More" is always in the bar, so at least one item must live only in its menu.
+    assert any(i.bar_min_width is None for i in NAV_ITEMS)
 
 
 def test_settings_refresh_without_garmin(app):

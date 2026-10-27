@@ -6,18 +6,20 @@ class NavItem:
     label: str
     href: str
     icon: str
-    # Shown directly in the phone bottom bar; the rest go under "More".
-    mobile_primary: bool = False
+    # Narrowest screen width (px) at which this item gets its own tab in the phone bottom bar.
+    # 0 means always; narrower screens, and every screen when None, list it under "More".
+    bar_min_width: int | None = None
 
 
 NAV_ITEMS: list[NavItem] = [
-    NavItem("Today", "/", "tabler:layout-dashboard", mobile_primary=True),
-    NavItem("Log", "/log", "tabler:circle-plus", mobile_primary=True),
-    NavItem("Ask", "/ask", "tabler:zoom-question", mobile_primary=True),
-    NavItem("Library", "/library", "tabler:books", mobile_primary=True),
-    NavItem("Projection", "/projection", "tabler:chart-line"),
-    NavItem("Coach", "/coach", "tabler:message-chatbot"),
-    NavItem("Trends", "/trends", "tabler:chart-dots"),
+    # Roughly 80 px per tab, counting the always-present "More" tab.
+    NavItem("Today", "/", "tabler:layout-dashboard", bar_min_width=0),
+    NavItem("Log", "/log", "tabler:circle-plus", bar_min_width=0),
+    NavItem("Ask", "/ask", "tabler:zoom-question", bar_min_width=0),
+    NavItem("Library", "/library", "tabler:books", bar_min_width=0),
+    NavItem("Projection", "/projection", "tabler:chart-line", bar_min_width=480),
+    NavItem("Coach", "/coach", "tabler:message-chatbot", bar_min_width=560),
+    NavItem("Trends", "/trends", "tabler:chart-dots", bar_min_width=640),
     NavItem("Settings", "/settings", "tabler:settings"),
 ]
 
