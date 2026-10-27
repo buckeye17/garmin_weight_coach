@@ -1,11 +1,8 @@
 import asyncio
 import json
-from contextvars import copy_context
 
 import httpx
 import pytest
-from dash._callback_context import context_value
-from dash._utils import AttributeDict
 
 from gwc.coach import label, llm
 from gwc.coach.llm import ImageInput, LLMError, LLMRequest, LLMResult, SubscriptionBackend
@@ -364,60 +361,70 @@ def test_read_label(isolated_settings):
     assert req.output_schema is label.LABEL_SCHEMA and req.config.feature == "parse"
 
 
-# --------------------------------------------------------------------------- Scan tab callbacks
-
-
-def run_callback(fn, trigger: str, *args):
-    def call():
-        context_value.set(AttributeDict(triggered_inputs=[{"prop_id": trigger, "value": 1}]))
-        return fn(*args)
-
-    return copy_context().run(call)
+# --------------------------------------------------------------------------- describe-or-scan panel
 
 
 @pytest.fixture
 def scan(db, monkeypatch):
     from gwc.web.app import create_app
-    from gwc.web.components import scan
+    from gwc.web.components import describe
 
     create_app()
-    monkeypatch.setattr(scan, "get_usda", lambda: usda_client([branded(1, "016000275287", "2023")]))
-    monkeypatch.setattr(scan, "get_off", lambda: off_client(None))
-    return scan
+    usda = usda_client([branded(1, "016000275287", "2023")])
+    monkeypatch.setattr(describe, "get_usda", lambda: usda)
+    monkeypatch.setattr("gwc.coach.parse.get_usda", lambda: usda)
+    monkeypatch.setattr(describe, "get_off", lambda: off_client(None))
+    return describe
 
 
-def test_scan_lookup_pick_and_rescan(scan):
-    card, match, target, shown, log_open, *_ = run_callback(
-        scan.lookup_code, "scan-code.data", {"code": "016000275287", "format": "upc_a"}, 0, 0, ""
-    )
-    assert match["source"] == "usda" and target == {"gtin": CHEERIOS, "hint": None}
-    assert shown == "016000275287" and "Cheerios Cereal" in str(card)
-    assert log_open is scan.no_update
+def test_scan_adds_rows_and_rescan(scan):
+    data, note, target = scan.on_scan({"code": "016000275287", "format": "upc_a"}, None, None)
+    (row,) = data["items"]
+    assert row["source"] == "barcode" and row["match"]["source"] == "usda"
+    assert row["amount_label"] == "1 1/2 cup" and row["grams"] == 39
+    assert target == {"gtin": CHEERIOS, "hint": None} and note is None
 
-    log_open, note, *_ = scan.pick_match(1, match)
-    assert log_open["food_id"] and "Saved Cheerios Cereal" in str(note)
+    # Saved to the library, the barcode finds it next time, without a lookup.
+    with session_scope() as s:
+        food_id = scan.save_items(s, [row])[0].id
+    data, note, target = scan.on_scan({"code": "0016000275287"}, data, None)
+    assert [r["key"] for r in data["items"]] == [0, 1]
+    assert data["items"][1]["source"] == "my_food" and data["items"][1]["food_id"] == food_id
+    assert target is None
 
-    # The second scan skips the lookup and opens the log dialog.
-    note, match, target, _shown, reopen, *_ = run_callback(
-        scan.lookup_code, "scan-lookup.n_clicks", None, 1, 0, "0016000275287"
-    )
-    assert reopen["food_id"] == log_open["food_id"] and match is None and target is None
+    # A number typed into the description box is looked up the same way.
+    out = scan.start_parse(1, " 016000275287 ", None, None, None)
+    assert out[0] is scan.no_update and out[5]["items"][0]["food_id"] == food_id
+    assert out[7] == ""  # the number is cleared once found
 
 
 def test_scan_lookup_messages(scan, monkeypatch):
-    note, *_ = run_callback(scan.lookup_code, "scan-lookup.n_clicks", None, 1, 0, "123")
-    assert "isn't a valid product barcode" in str(note)
-    note, *_ = run_callback(scan.lookup_code, "scan-lookup.n_clicks", None, 1, 0, "212345678909")
+    data, note, _ = scan.lookup_barcode("123", None, None, None)
+    assert data is scan.no_update and "isn't a valid product barcode" in str(note)
+    _, note, _ = scan.lookup_barcode("212345678909", None, None, None)
     assert "store's own label" in str(note)
     monkeypatch.setattr(scan, "get_usda", lambda: usda_client())
-    note, match, target, *_ = run_callback(
-        scan.lookup_code, "scan-lookup.n_clicks", None, 1, 0, "3017620422003"
-    )
-    assert "Not found" in str(note) and match is None and target["gtin"] == "03017620422003"
+    data, note, target = scan.lookup_barcode("3017620422003", None, None, None)
+    assert "Not found" in str(note) and data is scan.no_update
+    assert target["gtin"] == "03017620422003"
 
 
-def test_label_form_and_save(scan):
+def test_label_job_adds_a_row(scan):
+    from gwc.coach.jobs import get_jobs
+
     target = {"gtin": CHEERIOS, "hint": "Cheerios"}
+
+    def run(fn):
+        job = get_jobs().start("label", fn)
+        while job.running:
+            pass
+        return scan.poll_job(1, {"id": job.id, "kind": "label"}, None, target, None)
+
+    out = run(lambda j: (_ for _ in ()).throw(LLMError("No login.")))
+    assert "No login." in str(out[4]) and out[3] is scan.no_update
+    out = run(lambda j: {"readable": False, "per_serving": {}, "message": None})
+    assert "Couldn't read" in str(out[4])
+
     result = label.clean_label(
         {
             "readable": True,
@@ -428,63 +435,15 @@ def test_label_form_and_save(scan):
             "message": "Sodium was hard to read.",
         }
     )
-    values = scan.form_values(result, target)
-    assert len(values) == len(scan.LABEL_FIELDS)
-    assert values[:4] == ["Cheerios", "", "1 1/2 cup", 39]
-    assert values[4] == 140 and values[11:13] == ["Sodium was hard to read.", "block"]
-    assert values[13] == "Save it for barcode 016000275287" and values[14] is True
-
-    nuts = [PER_SERVING[k] for k in scan.NUTRIENT_KEYS]
-    _, _, error, *_ = run_callback(
-        scan.save_label,
-        "label-save.n_clicks",
-        1,
-        0,
-        "Cheerios",
-        "",
-        "1 1/2 cup",
-        0,
-        *nuts,
-        True,
-        target,
-    )
-    assert "serving size" in error
-    log_open, display, error, note, cleared = run_callback(
-        scan.save_label,
-        "label-save.n_clicks",
-        1,
-        0,
-        "Cheerios",
-        "",
-        "1 1/2 cup",
-        39,
-        *nuts,
-        True,
-        target,
-    )
-    assert log_open["food_id"] and display == "none" and error == "" and cleared is None
-    assert "under barcode 016000275287" in str(note)
-    with session_scope() as s:
-        assert barcode.saved_food(s, CHEERIOS).id == log_open["food_id"]
+    out = run(lambda j: result)
+    (row,) = out[3]["items"]
+    assert row["source"] == "label" and row["editable"] and row["name"] == "Cheerios"
+    assert row["gtin"] == CHEERIOS and scan.prefill(row)["kcal"] == 140
+    card = scan._item_card(row, scan.now(), "log", {})
+    assert "Sodium was hard to read." in str(card) and "Add to library" in str(card)
 
 
-def test_label_job_states(scan):
-    from gwc.coach.jobs import get_jobs
-
-    job = get_jobs().start("label", lambda j: (_ for _ in ()).throw(LLMError("No login.")))
-    while job.running:
-        pass
-    out = scan.poll_label(1, job.id, None)
-    assert "No login." in str(out[3]) and out[4] == "none"
-
-    job = get_jobs().start(
-        "label", lambda j: {"readable": False, "per_serving": {}, "message": None}
-    )
-    while job.running:
-        pass
-    out = scan.poll_label(1, job.id, None)
-    assert "Couldn't read" in str(out[3])
-
+def test_usda_find_gtin_errors():
     with pytest.raises(UsdaError):
         usda_client(status=401).find_gtin(CHEERIOS, [CHEERIOS])
 
@@ -504,7 +463,7 @@ def test_resolve_kinds(db):
 @pytest.fixture
 def recipe_page(db, monkeypatch):
     from gwc.web.app import create_app
-    from gwc.web.pages import foods as page
+    from gwc.web.pages import library as page
 
     create_app()
     monkeypatch.setattr(page, "get_usda", lambda: usda_client([branded(1, "016000275287", "2023")]))
@@ -531,7 +490,7 @@ def test_recipe_scan_misses(recipe_page, monkeypatch):
     monkeypatch.setattr(recipe_page, "get_usda", lambda: usda_client())
     options, value, text, color = recipe_page.recipe_scan({"code": "3017620422003"})
     assert options is recipe_page.no_update and value is recipe_page.no_update
-    assert "Read label" in text and color == "orange"
+    assert "with Label" in text and color == "orange"
     _, _, text, _ = recipe_page.recipe_scan({"code": "016000275288"})
     assert "isn't a valid product barcode" in text
 

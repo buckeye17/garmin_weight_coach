@@ -12,11 +12,12 @@ class NavItem:
 
 NAV_ITEMS: list[NavItem] = [
     NavItem("Today", "/", "tabler:layout-dashboard", mobile_primary=True),
-    NavItem("Add food", "/add", "tabler:circle-plus", mobile_primary=True),
-    NavItem("Projection", "/projection", "tabler:chart-line", mobile_primary=True),
-    NavItem("Coach", "/coach", "tabler:message-chatbot", mobile_primary=True),
+    NavItem("Log", "/log", "tabler:circle-plus", mobile_primary=True),
+    NavItem("Ask", "/ask", "tabler:zoom-question", mobile_primary=True),
+    NavItem("Library", "/library", "tabler:books", mobile_primary=True),
+    NavItem("Projection", "/projection", "tabler:chart-line"),
+    NavItem("Coach", "/coach", "tabler:message-chatbot"),
     NavItem("Trends", "/trends", "tabler:chart-dots"),
-    NavItem("Foods", "/foods", "tabler:tools-kitchen-2"),
     NavItem("Settings", "/settings", "tabler:settings"),
 ]
 

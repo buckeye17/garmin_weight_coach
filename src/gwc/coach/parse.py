@@ -6,16 +6,20 @@ that record, not taken from the model. Chain-restaurant items are researched
 on the web: Claude returns the chain's published numbers with the page they
 came from (official site first, then a third-party site). Items with no
 published numbers come back as Claude's own estimate, editable in the review
-table. Nothing is saved until the user confirms; confirmed restaurant items
-(published, or typed in by the user) become the user's own foods, so the next
-order is found without the web.
+table. Nothing is saved until the user confirms.
 
 A photo of the plate can come with the description (or instead of it), for
 places with no published nutrition. Claude itemizes what it sees; with no
-record behind them those rows are estimates, and they aren't saved as foods.
+record behind them those rows are estimates.
+
+Scanned barcodes and nutrition labels become review rows of the same shape
+(`library_row`, `match_row`, `label_row`), so every way of bringing food in ends
+in one list. A row joins the library only when the user asks (`save`): logged
+without it, an item is a snapshot entry with no food behind it.
 """
 
-from datetime import datetime
+import re
+from datetime import date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -29,8 +33,8 @@ from gwc.coach.llm import LLMRequest, get_backend
 from gwc.coach.settings import feature_config
 from gwc.coach.tools import FoodLookup
 from gwc.db.models import Food, FoodLog, FoodSource, LogSource
-from gwc.nutrition import foods
-from gwc.nutrition.log import log_food
+from gwc.nutrition import barcode, foods
+from gwc.nutrition.log import log_food, unit_label
 from gwc.nutrition.nutrients import NUTRIENT_KEYS, per100_of, scale
 from gwc.nutrition.service import get_usda
 from gwc.nutrition.usda import UsdaHit
@@ -147,16 +151,25 @@ ITEMS_SCHEMA: dict[str, Any] = {
 }
 
 
-def _parse_time(value: str | None, tz: ZoneInfo, now: datetime) -> datetime:
+def _parse_time(
+    value: str | None, tz: ZoneInfo, now: datetime, default: datetime | None = None
+) -> datetime:
     if not value:
-        return now
+        return default or now
     try:
         local = datetime.fromisoformat(value.strip().replace(" ", "T")[:16])
     except ValueError:
-        return now
+        return default or now
     if local.tzinfo is None:
         local = local.replace(tzinfo=tz)
     return min(local, now)  # never in the future
+
+
+def default_eaten_at(day: date | None, tz: ZoneInfo, now: datetime) -> datetime:
+    """When an item with no time was eaten: now, or midday when logging for a past day."""
+    if day is None or day >= now.astimezone(tz).date():
+        return now
+    return datetime(day.year, day.month, day.day, 12, tzinfo=tz)
 
 
 def _restaurant(raw: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -174,7 +187,12 @@ def _restaurant(raw: dict[str, Any] | None) -> dict[str, Any] | None:
 
 
 def resolve_items(
-    s: Session, raw: list[dict[str, Any]], lookup: FoodLookup, tz: ZoneInfo, now: datetime
+    s: Session,
+    raw: list[dict[str, Any]],
+    lookup: FoodLookup,
+    tz: ZoneInfo,
+    now: datetime,
+    default_at: datetime | None = None,
 ) -> list[dict[str, Any]]:
     """Turn Claude's items into review rows with per-100 g nutrients from real records.
 
@@ -188,10 +206,11 @@ def resolve_items(
         rest = _restaurant(item.get("restaurant"))
         row: dict[str, Any] = {
             "key": i,
+            "origin": "parse",
             "description": item.get("description") or "",
             "amount_label": item.get("amount_label") or f"{grams:.0f} g",
             "grams": round(grams, 1),
-            "eaten_at": _parse_time(item.get("eaten_at"), tz, now).isoformat(),
+            "eaten_at": _parse_time(item.get("eaten_at"), tz, now, default_at).isoformat(),
             "source": item.get("source"),
             "food_id": None,
             "hit": None,
@@ -242,22 +261,112 @@ def item_nutrients(row: dict[str, Any], grams: float | None = None) -> dict[str,
     return scale(per100, row["grams"] if grams is None else grams)
 
 
+def _row(name: str, source: str, at: datetime, origin: str, **fields: Any) -> dict[str, Any]:
+    """A review row that didn't come from Claude's itemizing (a scan or a label)."""
+    return {
+        "key": 0,
+        "origin": origin,
+        "description": "",
+        "amount_label": "100 g",
+        "grams": 100.0,
+        "eaten_at": at.isoformat(),
+        "source": source,
+        "food_id": None,
+        "hit": None,
+        "name": name,
+        "per100": None,
+        "error": None,
+        "restaurant": None,
+        "editable": False,
+        **fields,
+    }
+
+
+def library_row(food: Food, at: datetime) -> dict[str, Any]:
+    """A food already in the library (a barcode scanned before), at one serving."""
+    unit, amount = foods.default_unit(food)
+    option = foods.resolve_unit(food, unit)
+    return _row(
+        food.name,
+        "my_food",
+        at,
+        "scan",
+        food_id=food.id,
+        per100=per100_of(food),
+        grams=round(amount * option.grams, 1),
+        amount_label=unit_label(amount, option.label),
+    )
+
+
+def match_row(match: barcode.BarcodeMatch, at: datetime) -> dict[str, Any]:
+    """A product found for a scanned barcode, at one serving (or 100 g)."""
+    serving = match.servings[0] if match.servings else None
+    return _row(
+        match.name,
+        "barcode",
+        at,
+        "scan",
+        brand=match.brand,
+        match=match.to_dict(),
+        per100=match.per100,
+        grams=round(serving.grams, 1) if serving else 100.0,
+        # '1 1/2 cup (39 g)' -> '1 1/2 cup': the weight is shown (and logged) beside it.
+        amount_label=re.sub(r" \([\d,.]+ ?g\)$", "", serving.label) if serving else "100 g",
+        description=f"Barcode {barcode.display(match.gtin)}",
+    )
+
+
+def label_row(result: dict[str, Any], gtin: str | None, hint: str | None, at: datetime) -> dict:
+    """A Nutrition Facts label Claude read: editable, prefilled with one serving's numbers."""
+    grams = result.get("serving_grams")
+    per_serving = result.get("per_serving") or {}
+    return _row(
+        result.get("name") or hint or "Packaged food",
+        "label",
+        at,
+        "label",
+        brand=result.get("brand"),
+        gtin=gtin,
+        editable=True,
+        per_serving=per_serving,
+        per100=foods.per100_from_serving(per_serving, grams) if grams else None,
+        grams=grams or 0.0,
+        amount_label=result.get("serving_label") or "1 serving",
+        label_message=result.get("message"),
+        description="Nutrition label",
+    )
+
+
 def parse_description(
-    text: str, tz: ZoneInfo, now: datetime, job: Job | None = None, photo: str | None = None
+    text: str,
+    tz: ZoneInfo,
+    now: datetime,
+    job: Job | None = None,
+    photo: str | None = None,
+    day: date | None = None,
 ) -> dict:
     """Run Claude over `text` and an optional plate `photo` (a data: URL).
 
+    `day` is a past food day being filled in: times without a date fall on it.
     Returns {"items": [...review rows], "message": str | None, "model": str}.
     """
     from gwc.db.session import session_scope
 
     lookup = FoodLookup()
     local = now.astimezone(tz)
+    default_at = default_eaten_at(day, tz, now)
     images = [image_from_data_url(photo)] if photo else []
     what = text.strip() or "(nothing typed: itemize the photo)"
+    past = ""
+    if default_at != now:
+        past = (
+            f"I'm filling in {default_at:%A %Y-%m-%d}, a past day: times I give without a "
+            "date are on that day.\n\n"
+        )
     prompt = (
         f"Current local time: {local:%A %Y-%m-%d %H:%M}. Country for restaurant menus: "
         f"{get_pref('food.country')}.\n\n"
+        + past
         + ("A photo of my plate is attached.\n\n" if images else "")
         + f"What I ate:\n{what}"
     )
@@ -274,7 +383,7 @@ def parse_description(
     result = get_backend().run(req)
     data = result.data or {}
     with session_scope() as s:
-        items = resolve_items(s, data.get("items") or [], lookup, tz, now)
+        items = resolve_items(s, data.get("items") or [], lookup, tz, now, default_at)
     for row in items:
         row["photo"] = bool(images)
     return {"items": items, "message": data.get("message"), "model": result.model}
@@ -296,7 +405,10 @@ def save_restaurant_food(
     ).first()
     serving = (rest["serving_label"], rest["serving_grams"] or grams)
     if row.get("source") != "restaurant":  # typed in: the amount entered is the serving
-        serving = (row.get("amount_label") or rest["serving_label"], grams)
+        serving = (
+            row.get("amount_label") or rest["serving_label"],
+            row.get("serving_grams") or grams,
+        )
     food = foods.save_custom_food(
         s,
         food_id=existing.id if existing else None,
@@ -310,11 +422,52 @@ def save_restaurant_food(
     return food
 
 
-def saves_food(row: dict[str, Any]) -> bool:
-    """Published restaurant numbers, or ones the user typed in, but not Claude's guesses."""
-    if not row.get("restaurant"):
-        return False
-    return row.get("source") == "restaurant" or bool(row.get("edited"))
+def save_row_food(s: Session, row: dict[str, Any], totals: dict[str, float], grams: float) -> Food:
+    """Add a reviewed row to the library: the record it came from, or a food made from its numbers.
+
+    `totals` are the nutrients for `grams`; an editable row's `serving_grams` (one
+    portion, before any multiplier) becomes the new food's serving.
+    """
+    if row.get("food_id"):
+        food = s.get(Food, int(row["food_id"]))
+        if food is not None:
+            food.is_archived = False
+            return food
+    if row.get("hit"):
+        hit = UsdaHit.from_dict(row["hit"])
+        return foods.cache_usda_food(s, hit, get_usda().servings_for(hit))
+    if row.get("match"):
+        return barcode.save_match(s, barcode.BarcodeMatch.from_dict(row["match"]), get_usda())
+    if row.get("restaurant"):
+        return save_restaurant_food(s, row, totals, grams)
+    label = row.get("serving_label") or row.get("amount_label") or "1 serving"
+    food = foods.save_custom_food(
+        s,
+        food_id=None,
+        name=(row.get("name") or "Food").strip()[:255],
+        brand=row.get("brand"),
+        per100={k: totals.get(k, 0) * 100 / grams for k in NUTRIENT_KEYS},
+        servings=[(label, row.get("serving_grams") or grams)],
+    )
+    if row.get("gtin"):
+        barcode.remember(s, row["gtin"], food.id, "label")
+    return food
+
+
+def _totals(row: dict[str, Any], grams: float) -> dict[str, float]:
+    return row.get("totals") or item_nutrients(row, grams)
+
+
+def save_items(s: Session, rows: list[dict[str, Any]]) -> dict[int, Food]:
+    """Add the reviewed rows to the library without logging them; returns {row key: food}."""
+    saved = {}
+    for row in rows:
+        grams = float(row.get("grams") or 0)
+        if row.get("error") or grams <= 0:
+            continue
+        saved[row["key"]] = save_row_food(s, row, _totals(row, grams), grams)
+    s.flush()
+    return saved
 
 
 def first_eaten_at(rows: list[dict[str, Any]]) -> datetime | None:
@@ -334,8 +487,9 @@ def retime(rows: list[dict[str, Any]], first: datetime, at: datetime) -> list[di
 def confirm_items(s: Session, rows: list[dict[str, Any]], tz: ZoneInfo) -> int:
     """Log the reviewed rows; returns how many were logged.
 
-    Editable rows may carry `totals` (nutrients as entered) and `edited` (they differ
-    from Claude's prefill); restaurant rows are saved as the user's foods first.
+    Editable rows may carry `totals` (nutrients as entered). A row with `save` is
+    added to the library first and logged as that food; any other row without a
+    library food is logged as a snapshot.
     """
     logged = 0
     for row in rows:
@@ -344,18 +498,18 @@ def confirm_items(s: Session, rows: list[dict[str, Any]], tz: ZoneInfo) -> int:
             continue
         if row.get("editable") and not row.get("totals") and not row.get("per100"):
             continue  # nothing entered for it
-        totals = row.get("totals") or item_nutrients(row, grams)
+        totals = _totals(row, grams)
         eaten_at = datetime.fromisoformat(row["eaten_at"])
         label = row.get("amount_label") or f"{grams:.0f} g"
+        source = LogSource.SEARCH if row.get("source") == "barcode" else LogSource.AI
         note = None
-        if row.get("description"):
+        if row.get("origin") in ("scan", "label"):
+            note = row.get("description") or None  # "Barcode …", "Nutrition label"
+        elif row.get("description"):
             note = f"From{' photo' if row.get('photo') else ''}: {row['description']}"
         food_id = row.get("food_id")
-        if row.get("hit"):
-            hit = UsdaHit.from_dict(row["hit"])
-            food_id = foods.cache_usda_food(s, hit, get_usda().servings_for(hit)).id
-        elif saves_food(row):
-            food_id = save_restaurant_food(s, row, totals, grams).id
+        if row.get("save"):
+            food_id = save_row_food(s, row, totals, grams).id
         if food_id:
             entry = log_food(
                 s,
@@ -364,11 +518,13 @@ def confirm_items(s: Session, rows: list[dict[str, Any]], tz: ZoneInfo) -> int:
                 unit="g",
                 eaten_at=eaten_at,
                 tz=str(tz),
-                source=LogSource.AI,
+                source=source,
                 note=note,
             )
             entry.unit_label = f"{label} ({grams:.0f} g)"
         else:
+            if row.get("source") == "estimate":
+                note = "Estimated by Claude" + (f" · {note}" if note else "")
             entry = FoodLog(
                 eaten_at=eaten_at,
                 tz=str(tz),
@@ -376,8 +532,8 @@ def confirm_items(s: Session, rows: list[dict[str, Any]], tz: ZoneInfo) -> int:
                 grams=grams,
                 amount=grams,
                 unit_label=f"{label} ({grams:.0f} g)",
-                source=LogSource.AI,
-                note="Estimated by Claude" + (f" · {note}" if note else ""),
+                source=source,
+                note=note,
                 **{k: round(v, 3) for k, v in totals.items()},
             )
             s.add(entry)

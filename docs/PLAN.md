@@ -95,7 +95,7 @@ garmin_weight_coach/
 │  └─ web/
 │     ├─ app.py                 # DMC AppShell, navigation, theme
 │     ├─ components/
-│     └─ pages/                 # today, add_food, foods, trends, projection, coach, settings
+│     └─ pages/                 # today, log, ask, library, trends, projection, coach, settings
 ├─ tests/
 │  ├─ fixtures/                 # synthetic Garmin/USDA payloads (never real data)
 │  └─ ...
@@ -169,7 +169,7 @@ The user eats past midnight and usually sleeps after 04:00, so a food day is not
 ### 6.1 Foods
 | Source | Details |
 |---|---|
-| USDA FoodData Central (A) | Search Foundation, SR Legacy, Survey (FNDDS) and Branded foods. Needs a free key from api.data.gov (`USDA_API_KEY`). Searches use `POST /foods/search` (FDC's front end rejects GET searches filtered to "Survey (FNDDS)"). A food is cached in `food` when picked; SR Legacy/Foundation portions cost one extra detail request. |
+| USDA FoodData Central (A) | Search Foundation, SR Legacy, Survey (FNDDS) and Branded foods, through Claude's `search_usda` tool and barcode lookups (there is no separate USDA search page). Needs a free key from api.data.gov (`USDA_API_KEY`). Searches use `POST /foods/search` (FDC's front end rejects GET searches filtered to "Survey (FNDDS)"). A food is cached in `food` when it's added to the library; SR Legacy/Foundation portions cost one extra detail request. |
 | Custom foods (B) | Nutrients per serving or per 100 g, named servings (e.g. "1 scoop = 31 g"). |
 | Recipes (B) | Ingredients with amounts; total yield in grams or servings; nutrients computed. |
 | Favorites / recents | Quick re-logging. |
@@ -179,11 +179,14 @@ All foods are normalized to nutrients per 100 g plus named servings. The log dia
 ### 6.2 Log entries (`food_log`)
 `eaten_at` (UTC) + `tz`, `food_id`, `grams`, a **snapshot** of nutrient values at log time (editing a food later doesn't change history), optional `food_day_override`, `source` (search / custom / recipe / ai), and a note.
 
+The **library** is the non-archived rows of `food`. Food joins it only deliberately: entered on the Library page, or a described or scanned item with **Add to library** ticked (Log) or **Save to library** pressed (Ask, Library). Anything else is logged as a one-off: an entry with `food_id` null and only its snapshot. A one-off can be saved to the library later from the entry editor, which makes a custom food from its numbers (its unit label, e.g. "1/2 × 1 bowl (150 g)", gives the serving) and links the entry.
+
 ### 6.3 Natural-language logging (D)
 1. The user types e.g. "2 eggs scrambled in butter and a slice of sourdough at 1:30am".
 2. Claude parses it into items, amounts and time, using `search_usda` and `search_my_foods` tools to ground each item in a real food record rather than guessing nutrients.
 3. The app shows an editable review table (food match, amount, unit, nutrients). Nothing is saved until the user confirms.
-4. **Chain restaurants:** when the user names a chain ("Chipotle chicken bowl, no cheese"), Claude looks the item up on the web: the chain's official nutrition page, calculator or PDF first (adding up per-ingredient numbers for build-your-own chains, and applying the user's changes), then a reputable third-party site that reproduces the chain's numbers. It uses only the menu of the user's country (`food.country` pref, default United States), never numbers from memory. The review shows a Restaurant badge with an "Official" or "Third-party" source link. When nothing is published or readable (many chain sites block automated readers), the item comes back as an estimate with editable nutrient fields, prefilled with Claude's guess when it has one. Confirmed restaurant items, either published or typed in by the user, are saved as the user's own foods (brand = chain, `food.source_url` = the page), so the next order matches without the web. Unedited guesses are logged but not saved.
+4. **Chain restaurants:** when the user names a chain ("Chipotle chicken bowl, no cheese"), Claude looks the item up on the web: the chain's official nutrition page, calculator or PDF first (adding up per-ingredient numbers for build-your-own chains, and applying the user's changes), then a reputable third-party site that reproduces the chain's numbers. It uses only the menu of the user's country (`food.country` pref, default United States), never numbers from memory. The review shows a Restaurant badge with an "Official" or "Third-party" source link. When nothing is published or readable (many chain sites block automated readers), the item comes back as an estimate with editable nutrient fields, prefilled with Claude's guess when it has one. Restaurant items added to the library are saved as the user's own foods (brand = chain, `food.source_url` = the page), so the next order matches without the web.
+5. **One input, three uses.** The same describe-or-scan panel (`web/components/describe.py`) serves Log, Ask and Library. A plate photo can go with the description. A barcode, scanned or typed into the description box, is resolved against the library, USDA branded foods and Open Food Facts; a Nutrition Facts photo is read by Claude. Each adds rows to one review list (`coach/parse.py` builds rows of the same shape for all of them), so a meal can mix a description, a scanned bar and a label. Rows without a matched record (estimates, unpublished restaurant items, labels) show nutrient inputs for one portion times a portion count. On Log, a past food day (`/log?day=…`) makes times without a date fall on that day, defaulting to midday.
 
 ---
 
@@ -247,7 +250,7 @@ LLM calls run as background jobs (`coach/jobs.py`); pages poll for streamed text
 `get_overview`, `get_weight_trend`, `get_body_comp`, `get_daily_nutrition`, `get_food_entries`, `get_targets`, `get_garmin_daily`, `get_sleep`, `get_activities`, `get_projection`, plus `search_my_foods` / `search_usda` for food parsing. Weights come back in the display unit. Claude never writes to the database; proposed food entries go through the review table.
 
 ### 8.3 Features
-- **Natural-language logging** (Add food → Describe): structured output (a JSON schema) lists items, each tied to one of the user's foods, a USDA result Claude actually looked up, a chain restaurant's published numbers found on the web (§6.3), or, only when nothing fits, Claude's own estimate (flagged, with editable nutrients). Nutrients are computed from the matched record. The review shows each matched item with editable grams and an include toggle; nothing is saved until confirmed. Entries are logged with source `ai` and the original description as a note.
+- **Natural-language logging** (Log, Ask and Library → Describe or scan): structured output (a JSON schema) lists items, each tied to one of the user's foods, a USDA result Claude actually looked up, a chain restaurant's published numbers found on the web (§6.3), or, only when nothing fits, Claude's own estimate (flagged, with editable nutrients). Nutrients are computed from the matched record. The review shows each matched item with editable grams and an include toggle; nothing is saved until confirmed. Entries are logged with source `ai` (`search` for barcodes) and the original description as a note.
 - **Web access** (food logging only): on the subscription backend, Claude Code's built-in WebSearch and WebFetch tools (still no file or shell tools). On the API backend, a `web_research` tool runs its own request with the server-side `web_search` / `web_fetch` tools (`_20260209` dynamic-filtering versions on models that take them, basic web search otherwise), resumed across `pause_turn`. It's a separate request because web results always carry citations, which can't be combined with a JSON-schema answer.
 - **Coach chat page** with persisted conversations, suggested questions, and streamed replies rendered as Markdown.
 - **Weekly summary:** checked daily 10 minutes after the sync time and on startup; on the configured weekday (default Monday) the previous Monday–Sunday week is summarized if it hasn't been. Also on demand. Stored in `coach_summary`.
@@ -257,13 +260,14 @@ LLM calls run as background jobs (`coach/jobs.py`); pages poll for streamed text
 
 ## 9. Web UI
 
-DMC `AppShell` with a sidebar on desktop and bottom navigation below Mantine's `md` breakpoint (992 px), so the OnePlus Open gets touch navigation and full-width content both folded (~380 px) and unfolded (~750–900 px); light/dark theme. On folded widths tab rows drop their icons, and wide tables drop secondary columns rather than scroll.
+DMC `AppShell` with a sidebar on desktop and bottom navigation (Today, Log, Ask, Library; the rest under More) below Mantine's `md` breakpoint (992 px), so the OnePlus Open gets touch navigation and full-width content both folded (~380 px) and unfolded (~750–900 px); light/dark theme. On folded widths tab rows drop their icons, and wide tables drop secondary columns rather than scroll.
 
 | Page | Contents |
 |---|---|
-| **Today** (home) | Progress bars for the 7 nutrients vs. targets, remaining kcal, entry timeline for the current food day, quick add (favorites / recents) |
-| **Add food** | Tabs: Search USDA · My foods & recipes · Describe (AI); amount + unit input (g/oz/servings); time eaten (defaults to now) |
-| **Foods** | Create/edit custom foods and recipes |
+| **Today** (home) | The log for any food day (prev/next, date picker, `?day=`): progress bars for the 7 nutrients vs. targets, remaining kcal, entries with an editor (amount, portion, time, food day, save a one-off to the library); **Add to this day** on past days |
+| **Log** | Tabs: From library (search, categories; favorites then recents) · Describe or scan (log mode, per-item Add to library); amount + unit input (g/oz/servings); time eaten (defaults to now, or midday on a past day) |
+| **Ask** | Describe or scan (ask mode): nutrition plus today's totals after eating it; Log or Save to library |
+| **Library** | Tabs: Browse (search, All / Foods / Recipes, categories; favorite, edit, remove) · Describe or scan (library mode); New food and New recipe editors |
 | **Trends** | Weight (raw + trend), body fat, intake vs. Garmin burn and target, sleep, steps, activities; 30d / 90d / 1y / All range |
 | **Projection** | 4-week projection chart (§7.4), TDEE estimates, data completeness |
 | **Coach** | Chat + weekly summaries |

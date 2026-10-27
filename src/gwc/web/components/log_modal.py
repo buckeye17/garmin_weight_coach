@@ -1,15 +1,20 @@
-"""The "log a food" dialog, shared by the Add food and Today pages.
+"""The "log a library food" dialog, plus small pieces shared by food lists.
 
 A page opens it by writing {"food_id": ..., "nonce": ...} to the `logm-open`
 store (with allow_duplicate). After a successful log it bumps `logm-done`
 and shows a confirmation in `logm-result`. Editing the food's categories
-saves right away and bumps `logm-cats-saved`.
+saves right away and bumps `logm-cats-saved`. `logm-day` holds a past food
+day being filled in, which moves the default time to midday on that day.
 """
+
+from datetime import date
 
 import dash_mantine_components as dmc
 from dash import Input, Output, State, callback, dcc, no_update
 from dash.exceptions import PreventUpdate
 
+from gwc.coach.parse import default_eaten_at
+from gwc.db.models import Food
 from gwc.db.session import session_scope
 from gwc.nutrition import foods, log
 from gwc.nutrition.nutrients import NUTRIENTS, per100_of, scale
@@ -46,9 +51,33 @@ def category_input(id: str) -> dmc.TagsInput:
     )
 
 
-def log_modal() -> list:
+ALL_CATEGORIES = "__all__"
+
+
+def category_chips(categories: list[str], empty_hint: str) -> list:
+    """'All' plus one chip per category, for a ChipGroup whose value is ALL_CATEGORIES or a name."""
+    if not categories:
+        return [dmc.Text(empty_hint, size="xs", c="dimmed")]
+    return [
+        dmc.Chip(name, value=value, size="xs")
+        for name, value in [("All", ALL_CATEGORIES), *((c, c) for c in categories)]
+    ]
+
+
+def serving_summary(food: Food) -> str:
+    """'1 large · 72 kcal': the food's usual portion, for lists."""
+    if food.kcal is None:
+        return "calories unknown"
+    unit, amount = foods.default_unit(food)
+    option = foods.resolve_unit(food, unit)
+    kcal = food.kcal * amount * option.grams / 100
+    return f"{log.unit_label(amount, option.label)} · {kcal:,.0f} kcal"
+
+
+def log_modal(day: date | None = None) -> list:
     return [
         dcc.Store(id="logm-open"),
+        dcc.Store(id="logm-day", data=day.isoformat() if day else None),
         dcc.Store(id="logm-food-id"),
         dcc.Store(id="logm-done", data=0),
         dcc.Store(id="logm-cats-saved", data=0),
@@ -104,9 +133,10 @@ def log_modal() -> list:
     Output("logm-cats", "value"),
     Output("logm-error", "children", allow_duplicate=True),
     Input("logm-open", "data"),
+    State("logm-day", "data"),
     prevent_initial_call=True,
 )
-def _open(request):
+def _open(request, day):
     if not request or not request.get("food_id"):
         raise PreventUpdate
     with session_scope() as s:
@@ -124,7 +154,7 @@ def _open(request):
             unit_select_data(food),
             unit,
             amount_text(amount),
-            *to_picker(now()),
+            *to_picker(default_eaten_at(date.fromisoformat(day) if day else None, tz(), now())),
             food.is_favorite,
             foods.category_choices(s),
             food.category_names,

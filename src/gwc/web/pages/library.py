@@ -1,3 +1,10 @@
+"""Library: the foods and recipes the user logs from.
+
+Browse, favorite, edit and remove them; add one by describing or scanning it
+(components/describe.py in "library" mode) or by hand with the food and recipe
+editors. Recipes can pull ingredients from USDA or a scanned barcode.
+"""
+
 import dash
 import dash_mantine_components as dmc
 from dash import ALL, Input, Output, State, callback, clientside_callback, ctx, dcc, no_update
@@ -18,9 +25,23 @@ from gwc.web.components.common import (
     triggered_click,
     unit_select_data,
 )
-from gwc.web.components.log_modal import category_input, preview_line
+from gwc.web.components.describe import describe_panel
+from gwc.web.components.log_modal import (
+    ALL_CATEGORIES,
+    category_chips,
+    category_input,
+    preview_line,
+    serving_summary,
+)
 
 BASIS_SERVING, BASIS_100G = "Per serving", "Per 100 g"
+KIND_ALL = "all"
+KIND_SOURCES = {
+    KIND_ALL: None,
+    "food": [FoodSource.CUSTOM, FoodSource.USDA],
+    "recipe": [FoodSource.RECIPE],
+}
+SOURCE_BADGE = {FoodSource.USDA: "USDA", FoodSource.CUSTOM: "Mine", FoodSource.RECIPE: "Recipe"}
 
 
 # --------------------------------------------------------------------------- layout
@@ -174,13 +195,51 @@ def _recipe_editor() -> dmc.Modal:
     )
 
 
+def _browse_tab() -> dmc.Stack:
+    return dmc.Stack(
+        [
+            dmc.Group(
+                [
+                    dmc.TextInput(
+                        id="foods-filter",
+                        placeholder="Search your library",
+                        leftSection=icon("tabler:search", 16),
+                        debounce=300,
+                        flex=1,
+                        miw=180,
+                    ),
+                    dmc.SegmentedControl(
+                        id="foods-kind",
+                        data=[
+                            {"value": KIND_ALL, "label": "All"},
+                            {"value": "food", "label": "Foods"},
+                            {"value": "recipe", "label": "Recipes"},
+                        ],
+                        value=KIND_ALL,
+                    ),
+                ],
+                gap="xs",
+            ),
+            dmc.ChipGroup(
+                dmc.Group(id="foods-cat-chips", gap=6),
+                id="foods-cat",
+                value=ALL_CATEGORIES,
+                multiple=False,
+            ),
+            dmc.Stack(id="foods-list", gap="xs"),
+        ],
+        pt="sm",
+        gap="sm",
+    )
+
+
 def layout(**_kwargs):
     return dmc.Stack(
         [
             page_header(
-                "Foods",
-                "tabler:tools-kitchen-2",
-                "Your custom foods, recipes and saved USDA items.",
+                "Library",
+                "tabler:books",
+                "The foods and recipes you log from.",
                 dmc.Group(
                     [
                         dmc.Button(
@@ -188,6 +247,7 @@ def layout(**_kwargs):
                             id="new-food",
                             leftSection=icon("tabler:plus", 16),
                             size="xs",
+                            variant="light",
                         ),
                         dmc.Button(
                             "New recipe",
@@ -200,27 +260,26 @@ def layout(**_kwargs):
                     gap="xs",
                 ),
             ),
-            dmc.TextInput(
-                id="foods-filter",
-                placeholder="Filter",
-                leftSection=icon("tabler:filter", 16),
-                debounce=300,
-            ),
             dmc.Tabs(
                 [
                     dmc.TabsList(
                         [
-                            dmc.TabsTab("Custom", value="custom"),
-                            dmc.TabsTab("Recipes", value="recipe"),
-                            dmc.TabsTab("Saved USDA", value="usda"),
+                            dmc.TabsTab("Browse", value="browse", leftSection=icon("tabler:list")),
+                            dmc.TabsTab(
+                                "Describe or scan",
+                                value="add",
+                                leftSection=icon("tabler:sparkles"),
+                            ),
                         ],
                         grow=True,
                     ),
+                    dmc.TabsPanel(_browse_tab(), value="browse"),
+                    dmc.TabsPanel(dmc.Box(describe_panel("library"), pt="sm"), value="add"),
                 ],
-                id="foods-tab",
-                value="custom",
+                id="library-tabs",
+                value="browse",
+                persistence=True,
             ),
-            dmc.Stack(id="foods-list", gap="xs"),
             dcc.Store(id="fe-id"),
             dcc.Store(id="re-id"),
             dcc.Store(id="re-items", data=[]),
@@ -239,17 +298,9 @@ def layout(**_kwargs):
 
 
 def _food_row(f: Food) -> dmc.Paper:
-    details = []
-    if f.kcal is not None:
-        details.append(f"{f.kcal:,.0f} kcal/100 g")
-    if f.protein_g is not None:
-        details.append(f"P {f.protein_g:,.1f} g")
-    if f.servings:
-        details.append(
-            f.servings[0].label + (f" +{len(f.servings) - 1}" if len(f.servings) > 1 else "")
-        )
+    details = [serving_summary(f), SOURCE_BADGE[f.source]]
     if f.brand:
-        details.insert(0, f.brand)
+        details.append(f.brand)
     details += f.category_names
     edit = (
         [
@@ -302,23 +353,42 @@ def _food_row(f: Food) -> dmc.Paper:
 
 @callback(
     Output("foods-list", "children"),
-    Input("foods-tab", "value"),
+    Output("foods-cat-chips", "children"),
+    Output("foods-cat", "value"),
+    Input("foods-kind", "value"),
     Input("foods-filter", "value"),
+    Input("foods-cat", "value"),
     Input("foods-changed", "data"),
+    Input("ai-done", "data"),
 )
-def render_list(tab, query, _changed):
-    source = FoodSource(tab)
+def render_list(kind, query, category, _changed, _added):
     with session_scope() as s:
-        items = foods.search_foods(s, query or "", sources=[source], limit=200)
+        categories = foods.all_categories(s)
+        if category not in categories:
+            category = ALL_CATEGORIES  # e.g. its last food was recategorized
+        items = foods.search_foods(
+            s,
+            query or "",
+            sources=KIND_SOURCES.get(kind),
+            category=None if category == ALL_CATEGORIES else category,
+            limit=300,
+        )
         rows = [_food_row(f) for f in items]
+    chips = category_chips(
+        categories, "Give foods categories like Snack or Restaurant, then filter by them here."
+    )
     if rows:
-        return rows
-    empty = {
-        FoodSource.CUSTOM: "No custom foods yet. Use New food to enter one from a nutrition label.",
-        FoodSource.RECIPE: "No recipes yet. Use New recipe to combine ingredients.",
-        FoodSource.USDA: "USDA foods you log are saved here for quick reuse.",
-    }[source]
-    return [dmc.Text(empty, size="sm", c="dimmed")]
+        return rows, chips, category
+    if query or category != ALL_CATEGORIES:
+        empty = "No matching foods."
+    elif kind == "recipe":
+        empty = "No recipes yet. Use New recipe to combine ingredients."
+    else:
+        empty = (
+            "Nothing here yet. Use Describe or scan to add a food, or New food to type one "
+            "in from a label."
+        )
+    return [dmc.Text(empty, size="sm", c="dimmed")], chips, category
 
 
 @callback(
@@ -649,7 +719,7 @@ def scan_message(scan: barcode.Scan) -> tuple[str, str]:
     if match is None:
         return (
             f"Neither USDA nor Open Food Facts has nutrition for barcode {shown}. Add it on "
-            "Add food › Scan with Read label, then pick it here.",
+            "Library › Describe or scan with Label, then pick it here.",
             "orange",
         )
     if match.source == "off":
@@ -778,7 +848,7 @@ def recipe_preview(items, yield_g, n_servings):
     Output("re-modal", "opened", allow_duplicate=True),
     Output("foods-changed", "data", allow_duplicate=True),
     Output("re-error", "children", allow_duplicate=True),
-    Output("foods-tab", "value"),
+    Output("foods-kind", "value"),
     Input("re-save", "n_clicks"),
     Input("re-archive", "n_clicks"),
     State("re-id", "data"),
@@ -816,9 +886,10 @@ def save_recipe(_save, _archive, recipe_id, name, categories, items, yield_g, n_
 
 dash.register_page(
     __name__,
-    path="/foods",
-    name="Foods",
-    title="Foods · Weight Coach",
-    order=5,
+    path="/library",
+    redirect_from=["/foods"],
+    name="Library",
+    title="Library · Weight Coach",
+    order=3,
     layout=layout,
 )

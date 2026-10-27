@@ -508,9 +508,19 @@ def test_parse_and_confirm(db, usda):
         rows = s.query(FoodLog).order_by(FoodLog.id).all()
         assert all(r.source is LogSource.AI for r in rows)
         assert rows[0].unit_label == "2 large (100 g)" and rows[0].kcal == pytest.approx(143)
-        assert rows[1].food.fdc_id == 555 and rows[1].food.servings[0].label == "1 slice"
+        assert rows[0].food_id == egg_id
+        # A one-off USDA match is a snapshot: nothing joins the library unasked.
+        assert rows[1].food_id is None and rows[1].kcal == pytest.approx(108)
+        assert rows[1].note == "From: slice of sourdough"
+        assert s.query(Food).filter(Food.fdc_id == 555).count() == 0
         assert rows[2].food_id is None and rows[2].kcal == pytest.approx(800)
         assert rows[2].note.startswith("Estimated by Claude")
+
+    with session_scope() as s:  # ticked Add to library: cached and logged as that food
+        parse.confirm_items(s, [{**items[1], "save": True}], NY)
+    with session_scope() as s:
+        entry = s.query(FoodLog).order_by(FoodLog.id.desc()).first()
+        assert entry.food.fdc_id == 555 and entry.food.servings[0].label == "1 slice"
 
 
 def test_retime_moves_the_meal_and_keeps_gaps():
@@ -604,16 +614,16 @@ def test_parse_restaurant_items(db, usda):
     assert blank["editable"] and blank["per100"] is None and blank["grams"] == 250
 
     with session_scope() as s:
-        parse.confirm_items(s, [found], NY)
+        parse.confirm_items(s, [{**found, "save": True}], NY)
     with session_scope() as s:  # ordered again: the saved food is refreshed, not duplicated
-        parse.confirm_items(s, [{**found, "grams": 250}], NY)
+        parse.confirm_items(s, [{**found, "grams": 250, "save": True}], NY)
     typed = {**BOWL, "kcal": 450}
     with session_scope() as s:
         parse.confirm_items(
             s,
             [
-                {**blank, "totals": typed, "edited": True},
-                {**guessed, "totals": parse.item_nutrients(guessed), "edited": False},
+                {**blank, "totals": typed, "save": True},
+                {**guessed, "totals": parse.item_nutrients(guessed)},  # logged, not saved
             ],
             NY,
         )
@@ -685,6 +695,102 @@ def test_parse_plate_photo(db, usda):
     parse.parse_description("lunch", NY, NOW)
     req = llm.get_backend().requests[0]
     assert req.images == [] and "photo" not in req.messages[0]["content"]
+
+
+def test_parse_for_a_past_day(db, usda):
+    def respond(req):
+        assert "I'm filling in Sunday 2026-10-18, a past day" in req.messages[0]["content"]
+        item = {"food_id": None, "fdc_id": None, "restaurant": None, "source": "estimate"}
+        estimate = {**dict.fromkeys(BOWL, 0), "kcal": 300}
+        return LLMResult(
+            text="",
+            data={
+                "items": [
+                    {
+                        **item,
+                        "description": "toast",
+                        "amount_label": "1 slice",
+                        "grams": 40,
+                        "eaten_at": None,
+                        "estimate": estimate,
+                    },
+                    {
+                        **item,
+                        "description": "late snack",
+                        "amount_label": "1",
+                        "grams": 40,
+                        "eaten_at": "2026-10-18T23:15",
+                        "estimate": estimate,
+                    },
+                ],
+                "message": None,
+            },
+        )
+
+    use_backend(respond)
+    toast, snack = parse.parse_description("toast", NY, NOW, day=date(2026, 10, 18))["items"]
+    assert toast["eaten_at"] == "2026-10-18T12:00:00-04:00"  # no time given: midday that day
+    assert snack["eaten_at"] == "2026-10-18T23:15:00-04:00"
+    assert parse.default_eaten_at(date(2026, 10, 20), NY, NOW) == NOW  # today: now
+    assert parse.default_eaten_at(None, NY, NOW) == NOW
+
+
+def test_scanned_and_label_rows(db, usda):
+    from gwc.nutrition import barcode
+    from gwc.nutrition.usda import Serving as Sv
+
+    match = barcode.BarcodeMatch(
+        gtin="00016000275287",
+        source="off",
+        name="Cheerios",
+        brand="General Mills",
+        per100={**dict.fromkeys(BOWL, 0), "kcal": 360},
+        servings=[Sv("1 1/2 cup", 39)],
+        url="https://world.openfoodfacts.org/product/16000275287",
+    )
+    row = parse.match_row(match, NOW)
+    assert (row["grams"], row["amount_label"], row["origin"]) == (39, "1 1/2 cup", "scan")
+    with session_scope() as s:  # logged once without saving: a snapshot, barcode not kept
+        parse.confirm_items(s, [row], NY)
+    with session_scope() as s:
+        entry = s.query(FoodLog).one()
+        assert entry.food_id is None and entry.source is LogSource.SEARCH
+        assert entry.note == "Barcode 016000275287" and entry.kcal == pytest.approx(140.4)
+        assert barcode.saved_food(s, "00016000275287") is None
+        saved = parse.save_items(s, [row])[0]
+        assert barcode.saved_food(s, "00016000275287").id == saved.id
+        again = parse.library_row(saved, NOW)
+        assert again["food_id"] == saved.id and again["amount_label"] == "1 1/2 cup"
+
+    label = {
+        "name": None,
+        "brand": None,
+        "serving_label": "2 tbsp",
+        "serving_grams": 32,
+        "per_serving": {**dict.fromkeys(BOWL, 0), "kcal": 190, "fat_g": 16},
+        "message": None,
+    }
+    row = parse.label_row(label, "00012345678905", "Peanut butter", NOW)
+    assert row["editable"] and row["name"] == "Peanut butter"
+    assert row["per100"]["kcal"] == pytest.approx(190 * 100 / 32)
+    # Two servings, as the review hands them over, saved to the library under the barcode.
+    totals = {k: v * 2 for k, v in label["per_serving"].items()}
+    chosen = {
+        **row,
+        "grams": 64,
+        "serving_grams": 32,
+        "serving_label": "2 tbsp",
+        "amount_label": "2 × 2 tbsp",
+        "totals": totals,
+        "save": True,
+    }
+    with session_scope() as s:
+        parse.confirm_items(s, [chosen], NY)
+    with session_scope() as s:
+        food = barcode.saved_food(s, "00012345678905")
+        assert [(sv.label, sv.grams) for sv in food.servings] == [("2 tbsp", 32)]
+        entry = s.query(FoodLog).order_by(FoodLog.id.desc()).first()
+        assert entry.food_id == food.id and entry.kcal == pytest.approx(380)
 
 
 def test_parse_handles_empty_result(db, usda):

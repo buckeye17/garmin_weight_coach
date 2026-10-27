@@ -1,4 +1,10 @@
-import time
+"""Today: the food log for any day, with its targets.
+
+Step through days or pick one; `?day=YYYY-MM-DD` opens a past day (Log's "Back"
+link). Entries open an editor for amount, portion, time and food day, and a
+one-off entry can be saved to the library from there.
+"""
+
 from datetime import date, timedelta
 
 import dash
@@ -26,7 +32,6 @@ from gwc.web.components.common import (
     unit_select_data,
     when_inputs,
 )
-from gwc.web.components.log_modal import log_modal
 from gwc.web.components.nutrient_bars import nutrient_bars
 from gwc.web.format import fmt_day
 
@@ -97,6 +102,27 @@ def _edit_modal() -> dmc.Modal:
                     allowDeselect=False,
                 ),
                 dmc.TextInput(id="edit-note", label="Note"),
+                dmc.Group(
+                    [
+                        dmc.Text(
+                            "A one-off: not in your library.",
+                            id="edit-oneoff",
+                            size="xs",
+                            c="dimmed",
+                        ),
+                        dmc.Button(
+                            "Save to library",
+                            id="edit-to-library",
+                            variant="light",
+                            size="xs",
+                            leftSection=icon("tabler:books", 14),
+                        ),
+                    ],
+                    id="edit-library",
+                    justify="space-between",
+                    display="none",
+                ),
+                dmc.Text(id="edit-msg", c="brand", size="sm"),
                 dmc.Text(id="edit-error", c="red", size="sm"),
                 dmc.Group(
                     [
@@ -113,7 +139,79 @@ def _edit_modal() -> dmc.Modal:
     )
 
 
-def layout(**_kwargs):
+def _past_day(value: str | None) -> str | None:
+    """The `day` query parameter, if it names a food day before the current one."""
+    try:
+        day = date.fromisoformat(value) if value else None
+    except ValueError:
+        return None
+    if day is None:
+        return None
+    with session_scope() as s:
+        return day.isoformat() if day < current_food_day(s, tz(), now()) else None
+
+
+def _day_controls() -> dmc.Group:
+    return dmc.Group(
+        [
+            dmc.Button(
+                "Today",
+                id="day-today",
+                variant="subtle",
+                color="gray",
+                size="compact-sm",
+                display="none",
+            ),
+            dmc.Paper(
+                dmc.Group(
+                    [
+                        dmc.ActionIcon(
+                            icon("tabler:chevron-left"),
+                            id="day-prev",
+                            variant="subtle",
+                            color="gray",
+                            size="lg",
+                            **{"aria-label": "Previous day"},
+                        ),
+                        dmc.DatePickerInput(
+                            id="day-pick",
+                            valueFormat="MMM D",
+                            variant="unstyled",
+                            size="sm",
+                            w=82,
+                            leftSection=icon("tabler:calendar", 16),
+                            leftSectionPointerEvents="none",
+                            allowDeselect=False,
+                            **{"aria-label": "Pick a day"},
+                        ),
+                        dmc.ActionIcon(
+                            icon("tabler:chevron-right"),
+                            id="day-next",
+                            variant="subtle",
+                            color="gray",
+                            size="lg",
+                            **{"aria-label": "Next day"},
+                        ),
+                    ],
+                    gap=2,
+                    wrap="nowrap",
+                ),
+                p=2,
+                radius="md",
+                withBorder=True,
+            ),
+            dmc.Anchor(
+                dmc.Button("Log food", id="day-add-btn", leftSection=icon("tabler:plus", 16)),
+                id="day-add",
+                href="/log",
+            ),
+        ],
+        gap="xs",
+        justify="flex-end",
+    )
+
+
+def layout(day: str | None = None, **_kwargs):
     return dmc.Stack(
         [
             dmc.Group(
@@ -126,62 +224,11 @@ def layout(**_kwargs):
                         gap=0,
                         miw=0,
                     ),
-                    dmc.Group(
-                        [
-                            dmc.Paper(
-                                dmc.Group(
-                                    [
-                                        dmc.ActionIcon(
-                                            icon("tabler:chevron-left"),
-                                            id="day-prev",
-                                            variant="subtle",
-                                            color="gray",
-                                            size="lg",
-                                            **{"aria-label": "Previous day"},
-                                        ),
-                                        dmc.Button(
-                                            "Today",
-                                            id="day-today",
-                                            variant="subtle",
-                                            color="gray",
-                                            size="compact-sm",
-                                        ),
-                                        dmc.ActionIcon(
-                                            icon("tabler:chevron-right"),
-                                            id="day-next",
-                                            variant="subtle",
-                                            color="gray",
-                                            size="lg",
-                                            **{"aria-label": "Next day"},
-                                        ),
-                                    ],
-                                    gap=2,
-                                    wrap="nowrap",
-                                ),
-                                p=2,
-                                radius="md",
-                                withBorder=True,
-                            ),
-                            dmc.Anchor(
-                                dmc.Button("Add food", leftSection=icon("tabler:plus", 16)),
-                                href="/add",
-                            ),
-                        ],
-                        gap="xs",
-                        wrap="nowrap",
-                    ),
+                    _day_controls(),
                 ],
                 justify="space-between",
                 align="center",
                 mb=4,
-            ),
-            dmc.Alert(
-                id="logm-result",
-                color="brand",
-                variant="light",
-                display="none",
-                withCloseButton=True,
-                icon=icon("tabler:circle-check"),
             ),
             dmc.SimpleGrid(
                 [
@@ -224,52 +271,36 @@ def layout(**_kwargs):
                         ),
                         withBorder=True,
                     ),
-                    dmc.Stack(
-                        [
-                            dmc.Card(
-                                dmc.Stack(
+                    dmc.Card(
+                        dmc.Stack(
+                            [
+                                dmc.Group(
                                     [
-                                        dmc.Title("Quick add", order=5),
-                                        dmc.Group(id="quick-add", gap=6),
-                                    ],
-                                    gap="xs",
-                                ),
-                                withBorder=True,
-                            ),
-                            dmc.Card(
-                                dmc.Stack(
-                                    [
-                                        dmc.Group(
-                                            [
-                                                dmc.Title("Entries", order=5),
-                                                dmc.Text(
-                                                    "Tap one to change its amount or time",
-                                                    size="xs",
-                                                    c="dimmed",
-                                                ),
-                                            ],
-                                            justify="space-between",
-                                            align="baseline",
-                                            gap="xs",
+                                        dmc.Title("Entries", order=5),
+                                        dmc.Text(
+                                            "Tap one to change its amount or time",
+                                            size="xs",
+                                            c="dimmed",
                                         ),
-                                        dmc.Stack(id="day-entries", gap="xs"),
                                     ],
+                                    justify="space-between",
+                                    align="baseline",
                                     gap="xs",
                                 ),
-                                withBorder=True,
-                            ),
-                        ],
-                        gap="md",
+                                dmc.Stack(id="day-entries", gap="xs"),
+                            ],
+                            gap="xs",
+                        ),
+                        withBorder=True,
                     ),
                 ],
                 cols={"base": 1, "md": 2},
                 spacing="md",
             ),
-            dcc.Store(id="day-selected"),
+            dcc.Store(id="day-selected", data=_past_day(day)),
             dcc.Store(id="edit-entry-id"),
             dcc.Store(id="edit-done", data=0),
             _edit_modal(),
-            *log_modal(),
         ],
         gap="sm",
     )
@@ -371,16 +402,26 @@ def _calorie_ring(
     Input("day-prev", "n_clicks"),
     Input("day-next", "n_clicks"),
     Input("day-today", "n_clicks"),
+    Input("day-pick", "value"),
     State("day-selected", "data"),
     prevent_initial_call=True,
 )
-def change_day(_prev, _next, _today, selected):
+def change_day(_prev, _next, _today, picked, selected):
+    with session_scope() as s:
+        today = current_food_day(s, tz(), now())
     if ctx.triggered_id == "day-today":
         return None
-    with session_scope() as s:
-        base = date.fromisoformat(selected) if selected else current_food_day(s, tz(), now())
+    if ctx.triggered_id == "day-pick":
+        if not picked:
+            raise PreventUpdate
+        day = min(date.fromisoformat(picked[:10]), today)
+        if day.isoformat() == (selected or today.isoformat()):
+            raise PreventUpdate  # the picker just followed the day shown
+        return None if day == today else day.isoformat()
+    base = date.fromisoformat(selected) if selected else today
     step = -1 if ctx.triggered_id == "day-prev" else 1
-    return (base + timedelta(days=step)).isoformat()
+    day = base + timedelta(days=step)
+    return None if day >= today else day.isoformat()
 
 
 @callback(
@@ -393,15 +434,18 @@ def change_day(_prev, _next, _today, selected):
     Output("targets-hint", "children"),
     Output("day-incomplete", "checked"),
     Output("day-entries", "children"),
-    Output("quick-add", "children"),
     Output("day-next", "disabled"),
     Output("day-ring", "sections"),
     Output("day-ring-stats", "children"),
+    Output("day-pick", "value"),
+    Output("day-pick", "maxDate"),
+    Output("day-today", "display"),
+    Output("day-add", "href"),
+    Output("day-add-btn", "children"),
     Input("day-selected", "data"),
-    Input("logm-done", "data"),
     Input("edit-done", "data"),
 )
-def render_day(selected, _done, _edited):
+def render_day(selected, _edited):
     zone = tz()
     with session_scope() as s:
         today = current_food_day(s, zone, now())
@@ -413,19 +457,6 @@ def render_day(selected, _done, _edited):
         plan = day_targets(s, zone, now(), day)
         targets = plan.values
         incomplete = log.is_incomplete(s, day)
-        quick = foods.favorite_foods(s)[:6]
-        quick += [f for f in foods.recent_foods(s, 10) if f not in quick][: 10 - len(quick)]
-        quick_buttons = [
-            dmc.Button(
-                f.name if len(f.name) <= 28 else f.name[:26] + "…",
-                id={"type": "quick-food", "index": f.id},
-                variant="light",
-                size="compact-sm",
-                radius="xl",
-                leftSection=icon("tabler:star-filled", 12) if f.is_favorite else None,
-            )
-            for f in quick
-        ] or [dmc.Text("Foods you log or favorite show up here.", size="sm", c="dimmed")]
         entry_rows = [_entry_row(e, day) for e in entries] or [
             dmc.Text("Nothing logged for this day yet.", size="sm", c="dimmed")
         ]
@@ -463,10 +494,14 @@ def render_day(selected, _done, _edited):
         hint,
         incomplete,
         entry_rows,
-        quick_buttons,
         day >= today,
         ring,
         ring_stats,
+        day.isoformat(),
+        today.isoformat(),
+        "none" if day == today else "block",
+        "/log" if day == today else f"/log?day={day.isoformat()}",
+        "Log food" if day == today else "Add to this day",
     )
 
 
@@ -489,18 +524,6 @@ def toggle_incomplete(checked, selected, done):
 
 
 @callback(
-    Output("logm-open", "data", allow_duplicate=True),
-    Input({"type": "quick-food", "index": ALL}, "n_clicks"),
-    prevent_initial_call=True,
-)
-def quick_add(_clicks):
-    clicked = triggered_click()
-    if clicked is None:
-        raise PreventUpdate
-    return {"food_id": clicked["index"], "nonce": time.time()}
-
-
-@callback(
     Output("edit-modal", "opened", allow_duplicate=True),
     Output("edit-entry-id", "data"),
     Output("edit-modal", "title"),
@@ -514,6 +537,8 @@ def quick_add(_clicks):
     Output("edit-note", "value"),
     Output("edit-factor", "value"),
     Output("edit-error", "children", allow_duplicate=True),
+    Output("edit-library", "display"),
+    Output("edit-msg", "children", allow_duplicate=True),
     Input({"type": "entry-row", "index": ALL}, "n_clicks"),
     prevent_initial_call=True,
 )
@@ -547,6 +572,8 @@ def open_edit(_clicks):
             entry.food_day_override.isoformat() if entry.food_day_override else "auto",
             entry.note or "",
             "",
+            "",
+            "none" if food is not None and not food.is_archived else "flex",
             "",
         )
 
@@ -589,6 +616,33 @@ def save_edit(_save, _delete, entry_id, amount, unit, day, clock, day_value, not
     except ValueError as e:
         return no_update, no_update, str(e)
     return False, (done or 0) + 1, ""
+
+
+@callback(
+    Output("edit-library", "display", allow_duplicate=True),
+    Output("edit-msg", "children", allow_duplicate=True),
+    Output("edit-unit", "data", allow_duplicate=True),
+    Output("edit-unit", "value", allow_duplicate=True),
+    Output("edit-amount", "value", allow_duplicate=True),
+    Output("edit-error", "children", allow_duplicate=True),
+    Output("edit-done", "data", allow_duplicate=True),
+    Input("edit-to-library", "n_clicks"),
+    State("edit-entry-id", "data"),
+    State("edit-done", "data"),
+    prevent_initial_call=True,
+)
+def save_to_library(clicks, entry_id, done):
+    if not clicks or not entry_id:
+        raise PreventUpdate
+    try:
+        with session_scope() as s:
+            food = log.save_entry_as_food(s, int(entry_id))
+            message = f"Saved to your library as {food.name}. Rename it in the Library."
+            units = unit_select_data(food)
+            amount, unit = log.entry_unit(s, s.get(FoodLog, int(entry_id)))
+    except ValueError as e:
+        return no_update, "", no_update, no_update, no_update, str(e), no_update
+    return "none", message, units, unit, amount_text(amount), "", (done or 0) + 1
 
 
 @callback(

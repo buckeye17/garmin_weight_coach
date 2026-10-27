@@ -1,5 +1,5 @@
 /*
- * Barcode scanning and photos (Add food's Scan and Describe tabs, the recipe builder).
+ * Barcode scanning and photos (the describe-or-scan panel on Log, Ask and Library; the recipe builder).
  *
  * Scanning uses the browser's built-in BarcodeDetector (Chrome on Android), over a
  * full-screen camera view drawn outside Dash. A code is accepted once it reads the

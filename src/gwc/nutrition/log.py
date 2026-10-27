@@ -9,7 +9,14 @@ from sqlalchemy.orm import Session
 
 from gwc.analysis.food_day import FoodDays
 from gwc.db.models import Food, FoodDayStatus, FoodLog, LogSource
-from gwc.nutrition.foods import RECIPE_LABEL, RECIPE_UNIT, load_food, resolve_unit, unit_options
+from gwc.nutrition.foods import (
+    RECIPE_LABEL,
+    RECIPE_UNIT,
+    load_food,
+    resolve_unit,
+    save_custom_food,
+    unit_options,
+)
 from gwc.nutrition.nutrients import NUTRIENT_KEYS, add, per100_of, scale, zero
 
 SOURCE_FOR = {"usda": LogSource.SEARCH, "custom": LogSource.CUSTOM, "recipe": LogSource.RECIPE}
@@ -170,6 +177,37 @@ def scale_entry(s: Session, entry_id: int, factor: Fraction | float) -> FoodLog:
     return entry
 
 
+def save_entry_as_food(s: Session, entry_id: int) -> Food:
+    """Add a one-off entry to the library as a food made from its numbers, and link it."""
+    entry = s.get(FoodLog, entry_id)
+    if entry is None:
+        raise ValueError("Entry not found")
+    food = load_food(s, entry.food_id) if entry.food_id else None
+    if food is not None and not food.is_archived:
+        return food
+    if entry.grams <= 0:
+        raise ValueError("This entry has no weight to work from")
+    # '1 bowl (500 g)' -> one 500 g bowl; '2 × 1 slice (60 g)' -> one 30 g slice; '150 g' -> none.
+    core = re.sub(r" \([\d,.]+ g\)$", "", entry.unit_label or "")
+    count, serving = Fraction(1), core
+    if m := re.fullmatch(rf"({_COUNT}) × (.+)", core):
+        count, serving = parse_count(m[1]), m[2]
+    servings = []
+    if serving and not re.fullmatch(r"[\d.]+ (g|oz)", serving):
+        servings = [(serving, entry.grams / float(count))]
+    food = save_custom_food(
+        s,
+        food_id=None,
+        name=entry.description,
+        brand=None,
+        per100={k: getattr(entry, k) * 100 / entry.grams for k in NUTRIENT_KEYS},
+        servings=servings,
+    )
+    entry.food_id = food.id
+    s.flush()
+    return food
+
+
 def delete_entry(s: Session, entry_id: int) -> None:
     entry = s.get(FoodLog, entry_id)
     if entry is not None:
@@ -238,10 +276,14 @@ def entry_unit(s: Session, entry: FoodLog) -> tuple[float, str]:
     """Best guess at the unit an entry was logged in, for prefilling the edit form."""
     food: Food | None = load_food(s, entry.food_id) if entry.food_id else None
     label = entry.unit_label or ""
+    # Described items are logged in grams as '1 bowl (500 g)': match the serving by name.
+    core, by_weight = re.subn(r" \([\d,.]+ g\)$", "", label)
     if food is not None and entry.amount:
         for sv in food.servings:
             if label == sv.label or label.endswith(f"× {sv.label}"):
                 return entry.amount, f"serving:{sv.id}"
+            if by_weight and sv.grams and (core == sv.label or core.endswith(f"× {sv.label}")):
+                return round(entry.grams / sv.grams, 3), f"serving:{sv.id}"
         whole = label == RECIPE_LABEL or label.endswith(f"× {RECIPE_LABEL}")
         if whole and any(o.value == RECIPE_UNIT for o in unit_options(food)):
             return entry.amount, RECIPE_UNIT
