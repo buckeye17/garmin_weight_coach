@@ -1,6 +1,7 @@
 """Foods, servings and recipes. Nutrients are stored per 100 g."""
 
 from dataclasses import dataclass
+from enum import StrEnum
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
@@ -285,26 +286,67 @@ def set_categories(s: Session, food_id: int, names: list[str]) -> None:
     s.flush()
 
 
+class FoodSort(StrEnum):
+    RECENT = "recent"  # favorites first, then most recently logged
+    MOST_USED = "most_used"
+    NAME = "name"
+    FEWEST_KCAL = "fewest_kcal"  # per usual serving
+    MOST_PROTEIN = "most_protein"  # per usual serving
+    PROTEIN_PER_KCAL = "protein_per_kcal"
+
+
+SORT_LABELS = {
+    FoodSort.RECENT: "Recent",
+    FoodSort.MOST_USED: "Most used",
+    FoodSort.NAME: "Name",
+    FoodSort.FEWEST_KCAL: "Fewest calories",
+    FoodSort.MOST_PROTEIN: "Most protein",
+    FoodSort.PROTEIN_PER_KCAL: "Protein per calorie",
+}
+
+
+def serving_grams(food: Food) -> float:
+    """Grams in the food's usual portion (what `default_unit` prefills)."""
+    unit, amount = default_unit(food)
+    return amount * resolve_unit(food, unit).grams
+
+
+def serving_value(food: Food, key: str) -> float | None:
+    """A nutrient (per100 key) in the food's usual portion, or None if unknown."""
+    per100 = getattr(food, key)
+    return None if per100 is None else per100 * serving_grams(food) / 100
+
+
+def protein_per_100_kcal(food: Food) -> float | None:
+    if food.protein_g is None or not food.kcal:
+        return None
+    return food.protein_g / food.kcal * 100
+
+
 def search_foods(
     s: Session,
     query: str = "",
     *,
     sources: list[FoodSource] | None = None,
     category: str | None = None,
+    sort: FoodSort = FoodSort.RECENT,
     limit: int = 50,
 ) -> list[Food]:
-    last_used = (
-        select(FoodLog.food_id, func.max(FoodLog.eaten_at).label("last_used"))
+    """Foods matching every word of `query` (name or brand); unknown sort values go last."""
+    usage = (
+        select(
+            FoodLog.food_id,
+            func.max(FoodLog.eaten_at).label("last_used"),
+            func.count().label("uses"),
+        )
         .group_by(FoodLog.food_id)
         .subquery()
     )
     q = (
         select(Food)
-        .outerjoin(last_used, last_used.c.food_id == Food.id)
+        .outerjoin(usage, usage.c.food_id == Food.id)
         .where(Food.is_archived.is_(False))
         .options(selectinload(Food.servings), selectinload(Food.categories))
-        .order_by(Food.is_favorite.desc(), last_used.c.last_used.desc().nulls_last(), Food.name)
-        .limit(limit)
     )
     if sources:
         q = q.where(Food.source.in_(sources))
@@ -313,7 +355,39 @@ def search_foods(
     for word in query.split():
         pattern = f"%{word}%"
         q = q.where(or_(Food.name.ilike(pattern), Food.brand.ilike(pattern)))
-    return list(s.scalars(q))
+
+    recent = usage.c.last_used.desc().nulls_last()
+    by_name = func.lower(Food.name)
+    if sort is FoodSort.FEWEST_KCAL or sort is FoodSort.MOST_PROTEIN:
+        # Per serving, so sorted here rather than in SQL; a personal library is small.
+        key = "kcal" if sort is FoodSort.FEWEST_KCAL else "protein_g"
+        sign = 1 if sort is FoodSort.FEWEST_KCAL else -1
+
+        def per_serving(food: Food) -> tuple[bool, float]:
+            value = serving_value(food, key)
+            return value is None, sign * (value or 0)
+
+        return sorted(s.scalars(q.order_by(by_name)), key=per_serving)[:limit]
+    order = {
+        FoodSort.RECENT: (Food.is_favorite.desc(), recent, by_name),
+        FoodSort.MOST_USED: (func.coalesce(usage.c.uses, 0).desc(), recent, by_name),
+        FoodSort.NAME: (by_name,),
+        FoodSort.PROTEIN_PER_KCAL: (
+            (Food.protein_g / func.nullif(Food.kcal, 0)).desc().nulls_last(),
+            by_name,
+        ),
+    }[sort]
+    return list(s.scalars(q.order_by(*order).limit(limit)))
+
+
+def use_counts(s: Session, food_ids: list[int]) -> dict[int, int]:
+    """How many times each food has been logged; foods never logged are left out."""
+    q = (
+        select(FoodLog.food_id, func.count())
+        .where(FoodLog.food_id.in_(food_ids))
+        .group_by(FoodLog.food_id)
+    )
+    return {food_id: n for food_id, n in s.execute(q)}
 
 
 def recent_foods(s: Session, limit: int = 8) -> list[Food]:

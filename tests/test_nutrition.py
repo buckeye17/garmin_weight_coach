@@ -450,6 +450,46 @@ def test_search_orders_favorites_then_recent(db):
         assert [f.name for f in foods.search_foods(s)] == ["Bagel", "Apple"]
 
 
+def test_search_sort_orders(db):
+    with session_scope() as s:
+
+        def food(name, per100, servings):
+            return foods.save_custom_food(
+                s, food_id=None, name=name, brand=None, per100=per100, servings=servings
+            )
+
+        bar = food("Bar", {"kcal": 400, "protein_g": 20}, [("1 bar", 50)])  # 200 kcal, 10 g
+        chicken = food("chicken", {"kcal": 165, "protein_g": 31}, [("1 breast", 200)])  # 330, 62
+        rice = food("Rice", {"kcal": 130, "protein_g": 2.7}, [])  # per 100 g: 130 kcal, 2.7 g
+        mystery = food("Mystery", {}, [])  # unknown nutrients sort last
+        for f, times in ((rice, 3), (chicken, 2), (bar, 1)):
+            for day in range(times):
+                log.log_food(
+                    s, food_id=f.id, amount=1, unit="g", eaten_at=utc(2026, 10, 10 + day), tz="x"
+                )
+        foods.set_favorite(s, mystery.id, True)
+        s.flush()
+
+        def names(sort):
+            return [f.name for f in foods.search_foods(s, sort=sort)]
+
+        Sort = foods.FoodSort
+        assert names(Sort.RECENT) == ["Mystery", "Rice", "chicken", "Bar"]
+        assert names(Sort.MOST_USED) == ["Rice", "chicken", "Bar", "Mystery"]
+        assert names(Sort.NAME) == ["Bar", "chicken", "Mystery", "Rice"]
+        assert names(Sort.FEWEST_KCAL) == ["Rice", "Bar", "chicken", "Mystery"]
+        assert names(Sort.MOST_PROTEIN) == ["chicken", "Bar", "Rice", "Mystery"]
+        assert names(Sort.PROTEIN_PER_KCAL) == ["chicken", "Bar", "Rice", "Mystery"]
+        assert [f.name for f in foods.search_foods(s, sort=Sort.MOST_PROTEIN, limit=2)] == [
+            "chicken",
+            "Bar",
+        ]
+        assert foods.serving_value(chicken, "protein_g") == pytest.approx(62)
+        assert foods.serving_value(mystery, "kcal") is None
+        assert foods.protein_per_100_kcal(bar) == pytest.approx(5)
+        assert foods.use_counts(s, [rice.id, bar.id, mystery.id]) == {rice.id: 3, bar.id: 1}
+
+
 def test_categories(db):
     with session_scope() as s:
         blt = foods.save_custom_food(

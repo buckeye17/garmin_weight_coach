@@ -188,6 +188,36 @@ def test_analysis_callbacks_render_empty(app, isolated_settings):
     assert len(trends.render("90", None)) == 6
 
 
+def test_log_library_sort(app, isolated_settings):
+    from gwc.db.migrate import upgrade
+    from gwc.db.session import session_scope
+    from gwc.nutrition import foods
+    from gwc.web.components.log_modal import ALL_CATEGORIES
+    from gwc.web.pages import log
+
+    upgrade()
+    with session_scope() as s:
+        foods.save_custom_food(
+            s,
+            food_id=None,
+            name="Chicken",
+            brand=None,
+            per100={"kcal": 165, "protein_g": 31},
+            servings=[("1 breast", 200)],
+        )
+
+    def listed(sort):
+        rows, _chips, _cat = log.list_mine("", sort, ALL_CATEGORIES, "library", 0, 0, 0)
+        return str(rows)
+
+    assert "62 g" in listed("most_protein")
+    assert "330 kcal" in listed("fewest_kcal")
+    assert "18.8 g/100 kcal" in listed("protein_per_kcal")
+    assert "0×" in listed("most_used")
+    assert "Badge" not in listed("recent")
+    assert "Badge" not in listed("no-such-sort")  # e.g. a stale persisted value
+
+
 def test_coach_callbacks(app, isolated_settings):
     from datetime import date
 

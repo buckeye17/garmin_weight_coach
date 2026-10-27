@@ -41,7 +41,23 @@ def past_day(value: str | None) -> date | None:
         return day if day < current_food_day(s, tz(), now()) else None
 
 
-def _food_row(f: Food) -> dmc.UnstyledButton:
+def _sort_badge(f: Food, sort: foods.FoodSort, uses: dict[int, int]) -> str | None:
+    """The value the list is sorted by, when it isn't already obvious from the order."""
+    if sort is foods.FoodSort.MOST_USED:
+        return f"{uses.get(f.id, 0)}×"
+    if sort is foods.FoodSort.FEWEST_KCAL:
+        kcal = foods.serving_value(f, "kcal")
+        return None if kcal is None else f"{kcal:,.0f} kcal"
+    if sort is foods.FoodSort.MOST_PROTEIN:
+        protein = foods.serving_value(f, "protein_g")
+        return None if protein is None else f"{protein:,.0f} g"
+    if sort is foods.FoodSort.PROTEIN_PER_KCAL:
+        ratio = foods.protein_per_100_kcal(f)
+        return None if ratio is None else f"{ratio:,.1f} g/100 kcal"
+    return None
+
+
+def _food_row(f: Food, badge: str | None = None) -> dmc.UnstyledButton:
     bits = [serving_summary(f), SOURCE_BADGE[f.source]]
     if f.brand:
         bits.append(f.brand)
@@ -64,6 +80,7 @@ def _food_row(f: Food) -> dmc.UnstyledButton:
                         flex=1,
                         miw=0,
                     ),
+                    *([dmc.Badge(badge, variant="light", size="sm", tt="none")] if badge else []),
                     dmc.ThemeIcon(icon("tabler:plus", 16), variant="light", size="lg"),
                 ],
                 wrap="nowrap",
@@ -82,11 +99,29 @@ def _food_row(f: Food) -> dmc.UnstyledButton:
 def _library_tab() -> dmc.Stack:
     return dmc.Stack(
         [
-            dmc.TextInput(
-                id="mine-query",
-                placeholder="Search your foods and recipes",
-                leftSection=icon("tabler:search", 16),
-                debounce=300,
+            dmc.Group(
+                [
+                    dmc.TextInput(
+                        id="mine-query",
+                        placeholder="Search your foods and recipes",
+                        leftSection=icon("tabler:search", 16),
+                        debounce=300,
+                        flex=1,
+                        miw=180,
+                    ),
+                    # Full width under the search on phones, beside it on wider screens.
+                    dmc.Select(
+                        id="mine-sort",
+                        data=[{"value": k.value, "label": v} for k, v in foods.SORT_LABELS.items()],
+                        value=foods.FoodSort.RECENT.value,
+                        leftSection=icon("tabler:arrows-sort", 16),
+                        allowDeselect=False,
+                        persistence=True,
+                        w={"base": "100%", "xs": 200},
+                        **{"aria-label": "Sort foods"},
+                    ),
+                ],
+                gap="xs",
             ),
             dmc.ChipGroup(
                 dmc.Group(id="mine-cat-chips", gap=6),
@@ -163,22 +198,28 @@ def layout(day: str | None = None, **_kwargs):
     Output("mine-cat-chips", "children"),
     Output("mine-cat", "value"),
     Input("mine-query", "value"),
+    Input("mine-sort", "value"),
     Input("mine-cat", "value"),
     Input("log-tabs", "value"),
     Input("logm-done", "data"),
     Input("logm-cats-saved", "data"),
     Input("ai-done", "data"),
 )
-def list_mine(query, category, tab, _done, _cats_saved, _ai_done):
+def list_mine(query, sort, category, tab, _done, _cats_saved, _ai_done):
     if tab != "library":
         return no_update, no_update, no_update
+    try:
+        sort = foods.FoodSort(sort)
+    except ValueError:
+        sort = foods.FoodSort.RECENT
     with session_scope() as s:
         categories = foods.all_categories(s)
         if category not in categories:
             category = ALL_CATEGORIES  # e.g. its last food was recategorized
         chosen = None if category == ALL_CATEGORIES else category
-        items = foods.search_foods(s, query or "", category=chosen)
-        rows = [_food_row(f) for f in items]
+        items = foods.search_foods(s, query or "", category=chosen, sort=sort)
+        uses = foods.use_counts(s, [f.id for f in items])
+        rows = [_food_row(f, _sort_badge(f, sort, uses)) for f in items]
         if not rows:
             text = (
                 "No matching foods."
