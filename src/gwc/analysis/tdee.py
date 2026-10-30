@@ -6,6 +6,10 @@
   moved: mean intake on complete food days − ρ × weight slope. The slope is a
   least-squares fit to the daily weigh-ins in the window rather than the
   change in the smoothed trend, which lags real changes by ~10 days.
+  Intake and weigh-ins come from the same days: from the first complete food
+  day in the window, and when that's the start of logging after a break, from
+  a week later, since the first days of a diet shed water and glycogen that
+  would otherwise read as fat loss.
 
 Both include whatever workouts you did. `exercise_kcal` is the average net
 workout burn over the same days, and `base_kcal` is the estimate without it:
@@ -21,7 +25,7 @@ median keeps one big day from raising "usual", which errs toward eating less.
 import math
 import statistics
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 
 from gwc.analysis.days import DayRecord
 from gwc.analysis.trend import Weighin
@@ -33,6 +37,10 @@ GARMIN_SYSTEMATIC_PCT = 0.05
 ADAPTIVE_MIN_SPAN_DAYS = 14
 ADAPTIVE_MIN_COMPLETE_DAYS = 10
 ADAPTIVE_MIN_WEIGHINS = 4
+# Logging that resumes after this many days without a complete food day is a new
+# start, and the fit skips its first ADAPTIVE_SETTLE_DAYS.
+ADAPTIVE_BREAK_DAYS = 7
+ADAPTIVE_SETTLE_DAYS = 7
 # Days with Garmin active kcal needed before steps are judged against "usual".
 MIN_STEP_DAYS = 3
 
@@ -115,15 +123,46 @@ def linear_slope(points: list[tuple[float, float]]) -> tuple[float, float]:
     return slope, math.sqrt(resid / (n - 2) / sxx)
 
 
+def adaptive_history_days(window: int) -> int:
+    """Ended days `adaptive_tdee` needs to see a logging start that is still settling."""
+    return window + ADAPTIVE_SETTLE_DAYS + ADAPTIVE_BREAK_DAYS
+
+
+def fit_start(ended: list[DayRecord], window: int) -> tuple[date | None, bool]:
+    """First day the adaptive fit uses, and whether it skips a new start's settling days.
+
+    That's the first complete food day in the window, or a week after logging resumed
+    following a break, whichever is later. History that doesn't reach back far enough
+    to see a break counts as logging that's been going all along.
+    """
+    first = next((d.day for d in ended[-window:] if d.complete), None)
+    if first is None:
+        return None, False
+    known = {d.day for d in ended}
+    logged = {d.day for d in ended if d.complete}
+    start = first
+    while start + timedelta(days=ADAPTIVE_SETTLE_DAYS) > first:
+        before = [start - timedelta(days=k) for k in range(1, ADAPTIVE_BREAK_DAYS + 1)]
+        if not all(d in known for d in before):
+            return first, False
+        earlier = [d for d in before if d in logged]
+        if not earlier:
+            return start + timedelta(days=ADAPTIVE_SETTLE_DAYS), True
+        start = max(earlier)
+    return first, False
+
+
 def adaptive_tdee(
     ended: list[DayRecord],
     weighins: list[Weighin],
     rho: float,
     window: int = 21,
 ) -> TdeeEstimate:
-    days = ended[-window:]
+    start, settling = fit_start(ended, window)
+    days = [d for d in ended[-window:] if start is not None and d.day >= start]
     if not days:
-        return TdeeEstimate("adaptive", None, None, False, "Calibrating: no food days yet.")
+        note = "settling after you started logging" if settling else "no food days yet"
+        return TdeeEstimate("adaptive", None, None, False, f"Calibrating: {note}.")
     first, last = days[0].day, days[-1].day
     complete = [d.kcal for d in days if d.complete]
     points = [((w.day - first).days, w.weight_kg) for w in weighins if first <= w.day <= last]
@@ -140,7 +179,10 @@ def adaptive_tdee(
             None,
             None,
             False,
-            "Calibrating: " + ", ".join(missing) + f" in the last {window}.",
+            "Calibrating: "
+            + ", ".join(missing)
+            + (f" since {first:%b} {first.day}" if settling else f" in the last {window}")
+            + ".",
             days_used=len(complete),
         )
 

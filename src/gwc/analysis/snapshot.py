@@ -59,7 +59,7 @@ def build_snapshot(s: Session, tz: ZoneInfo, now: datetime, history_days: int = 
     today = current_food_day(s, tz, now)
     window = int(get_pref("analysis.adaptive_window_days", session=s))
     alpha = float(get_pref("analysis.trend_alpha", session=s))
-    span = max(window, tdee.GARMIN_DAYS * 2, history_days)
+    span = max(tdee.adaptive_history_days(window), tdee.GARMIN_DAYS * 2, history_days)
     records = load_days(s, tz, today - timedelta(days=span), today)
 
     weighins = daily_weighins(s, tz)

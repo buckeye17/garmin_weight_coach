@@ -16,7 +16,7 @@ from gwc.analysis.exercise import (
 from gwc.analysis.food_day import FoodDays
 from gwc.analysis.projection import project, simulate
 from gwc.analysis.snapshot import build_snapshot
-from gwc.analysis.tdee import adaptive_tdee, choose, garmin_tdee, linear_slope
+from gwc.analysis.tdee import adaptive_tdee, choose, fit_start, garmin_tdee, linear_slope
 from gwc.analysis.trend import Weighin, daily_weighins, ewma, weight_trend
 from gwc.analysis.units import KG_PER_LB
 from gwc.db.migrate import upgrade
@@ -193,6 +193,47 @@ def test_adaptive_tdee_calibrating():
     assert not adaptive_tdee(flagged, weighins, rho=7700).ready
 
 
+def _started_logging(through: int, start: int = 7):
+    """No logging before day `start`, then 2,500 kcal/day: 2 kg of water off in the first
+    two days, and 0.1 kg/day after."""
+    records = [rec(i, kcal=2500 if i >= start else None) for i in range(through + 1)]
+
+    def kg(i: int) -> float:
+        if i <= start:
+            return 122.0
+        return 122.0 - min(i - start, 2) - 0.1 * (i - start)
+
+    return records, [Weighin(day(i), kg(i), None) for i in range(through + 1)]
+
+
+def test_adaptive_tdee_skips_water_weight_after_starting_to_log():
+    # Too soon: only days 14–20 count, a week after logging started on day 7.
+    est = adaptive_tdee(*_started_logging(20), rho=7700, window=21)
+    assert not est.ready and "7 of 10 complete food days" in est.note and "since" in est.note
+    # Days 14–27 count; the water drop on days 8–9 doesn't read as fat loss.
+    est = adaptive_tdee(*_started_logging(27), rho=7700, window=21)
+    assert est.ready and est.days_used == 14
+    assert est.kcal == pytest.approx(2500 + 770)
+    # Still skipped once the start of logging has left the window.
+    est = adaptive_tdee(*_started_logging(30), rho=7700, window=21)
+    assert est.days_used == 17 and est.kcal == pytest.approx(2500 + 770)
+
+
+def test_adaptive_fit_start():
+    records, _ = _started_logging(30)
+    assert fit_start(records, 21) == (day(14), True)
+    # A short gap isn't a new start.
+    gap = [rec(i) if 18 <= i <= 20 else r for i, r in enumerate(records)]
+    assert fit_start(gap, 10) == (day(21), False)
+    # Without history before the window, logging counts as ongoing.
+    assert fit_start(records[7:], 21) == (day(10), False)
+    # Weigh-ins from before the first complete food day are left out.
+    records, weighins = _losing(21, 2500, -0.1)
+    early = [Weighin(day(i - 3), 130.0, None) for i in range(3)] + weighins
+    est = adaptive_tdee([rec(i - 3) for i in range(3)] + records, early, rho=7700, window=24)
+    assert est.kcal == pytest.approx(2500 + 770)
+
+
 def test_choose():
     g = garmin_tdee([rec(0)])
     a_ready = adaptive_tdee(*_losing(21, 2500, -0.1), rho=7700)
@@ -334,7 +375,7 @@ def test_suggest_without_data():
 NOW = utc(2026, 10, 20, 18, 0)  # 14:00 EDT on food day Oct 20
 
 
-def _seed(s, days: int = 21):
+def _seed(s, days: int = 35):  # long enough that logging isn't a fresh start
     today = NOW.astimezone(NY).date()
     for i in range(days, 0, -1):
         d = today - timedelta(days=i)
@@ -526,7 +567,7 @@ def test_steps_above_usual_raise_todays_targets(db):
         _seed(s)
         s.flush()
         rows = s.scalars(select(DailySummary).order_by(DailySummary.calendar_date)).all()
-        for i, row in enumerate(rows):
+        for i, row in enumerate(rows[-21:]):  # the trend window
             row.active_kcal = 1100 if i in (2, 9, 16) else 800
     with session_scope() as s:
         snap = build_snapshot(s, NY, NOW)
