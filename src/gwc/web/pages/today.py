@@ -3,6 +3,9 @@
 Step through days or pick one; `?day=YYYY-MM-DD` opens a past day (Log's "Back"
 link). Entries open an editor for amount, portion, time and food day, and a
 one-off entry can be saved to the library from there.
+
+The Activity card lists the day's workouts: Garmin's after a sync, and any added
+here with a guess at the calories they burned beyond resting.
 """
 
 from datetime import date, timedelta
@@ -12,10 +15,12 @@ import dash_mantine_components as dmc
 from dash import ALL, Input, Output, State, callback, ctx, dcc, no_update
 from dash.exceptions import PreventUpdate
 
+from gwc.analysis import exercise
+from gwc.analysis.exercise import MAX_MANUAL_KCAL, Workout
 from gwc.analysis.food_day import current_food_day, food_days_around
 from gwc.analysis.targets import NO_GOAL, TargetPlan, day_targets
 from gwc.analysis.units import weight_unit
-from gwc.db.models import FoodLog
+from gwc.db.models import FoodLog, ManualActivity
 from gwc.db.session import session_scope
 from gwc.nutrition import foods, log
 from gwc.web.components.analysis_text import flag_messages, plan_summary
@@ -135,6 +140,45 @@ def _edit_modal() -> dmc.Modal:
         ),
         id="edit-modal",
         title="Edit entry",
+        centered=True,
+    )
+
+
+def _activity_modal() -> dmc.Modal:
+    return dmc.Modal(
+        dmc.Stack(
+            [
+                dmc.TextInput(
+                    id="act-name",
+                    label="Activity",
+                    placeholder="Sand volleyball",
+                    inputProps={"autoComplete": "off"},
+                ),
+                dmc.NumberInput(
+                    id="act-kcal",
+                    label="Extra calories burned",
+                    description="Your guess beyond what you'd burn resting. The target adds "
+                    "the same share as for Garmin workouts.",
+                    min=0,
+                    max=MAX_MANUAL_KCAL,
+                    step=50,
+                    allowDecimal=False,
+                    allowNegative=False,
+                    thousandSeparator=",",
+                    suffix=" kcal",
+                ),
+                dmc.Text(id="act-error", c="red", size="sm"),
+                dmc.Group(
+                    [
+                        dmc.Button("Delete", id="act-delete", color="red", variant="subtle"),
+                        dmc.Button("Save", id="act-save"),
+                    ],
+                    justify="space-between",
+                ),
+            ]
+        ),
+        id="act-modal",
+        title="Add activity",
         centered=True,
     )
 
@@ -271,27 +315,56 @@ def layout(day: str | None = None, **_kwargs):
                         ),
                         withBorder=True,
                     ),
-                    dmc.Card(
-                        dmc.Stack(
-                            [
-                                dmc.Group(
+                    dmc.Stack(
+                        [
+                            dmc.Card(
+                                dmc.Stack(
                                     [
-                                        dmc.Title("Entries", order=5),
-                                        dmc.Text(
-                                            "Tap one to change its amount or time",
-                                            size="xs",
-                                            c="dimmed",
+                                        dmc.Group(
+                                            [
+                                                dmc.Title("Entries", order=5),
+                                                dmc.Text(
+                                                    "Tap one to change its amount or time",
+                                                    size="xs",
+                                                    c="dimmed",
+                                                ),
+                                            ],
+                                            justify="space-between",
+                                            align="baseline",
+                                            gap="xs",
                                         ),
+                                        dmc.Stack(id="day-entries", gap="xs"),
                                     ],
-                                    justify="space-between",
-                                    align="baseline",
                                     gap="xs",
                                 ),
-                                dmc.Stack(id="day-entries", gap="xs"),
-                            ],
-                            gap="xs",
-                        ),
-                        withBorder=True,
+                                withBorder=True,
+                            ),
+                            dmc.Card(
+                                dmc.Stack(
+                                    [
+                                        dmc.Group(
+                                            [
+                                                dmc.Title("Activity", order=5),
+                                                dmc.Button(
+                                                    "Add activity",
+                                                    id="act-add",
+                                                    variant="light",
+                                                    size="compact-sm",
+                                                    leftSection=icon("tabler:plus", 14),
+                                                ),
+                                            ],
+                                            justify="space-between",
+                                            align="center",
+                                            gap="xs",
+                                        ),
+                                        dmc.Stack(id="day-activities", gap="xs"),
+                                    ],
+                                    gap="xs",
+                                ),
+                                withBorder=True,
+                            ),
+                        ],
+                        gap="md",
                     ),
                 ],
                 cols={"base": 1, "md": 2},
@@ -300,7 +373,9 @@ def layout(day: str | None = None, **_kwargs):
             dcc.Store(id="day-selected", data=_past_day(day)),
             dcc.Store(id="edit-entry-id"),
             dcc.Store(id="edit-done", data=0),
+            dcc.Store(id="act-id"),
             _edit_modal(),
+            _activity_modal(),
         ],
         gap="sm",
     )
@@ -341,6 +416,46 @@ def _entry_row(e: FoodLog, day: date) -> dmc.UnstyledButton:
         id={"type": "entry-row", "index": e.id},
         w="100%",
     )
+
+
+def _activity_row(w: Workout, day: date):
+    """A workout and its calories above resting; ones added here open an editor."""
+    if w.manual_id is None:
+        mins = f" · {w.duration_s / 60:,.0f} min" if w.duration_s else ""
+        when, detail = fmt_clock(w.start_at, day), f"Garmin{mins} · {w.kcal:,.0f} kcal total"
+    else:
+        when, detail = "", "Added here · tap to edit"
+    row = dmc.Paper(
+        dmc.Group(
+            [
+                dmc.Text(when, size="xs", c="dimmed", w=72),
+                dmc.Stack(
+                    [
+                        dmc.Text(w.name, size="sm", fw=500, lineClamp=1),
+                        dmc.Text(detail, size="xs", c="dimmed", lineClamp=1),
+                    ],
+                    gap=0,
+                    flex=1,
+                    miw=0,
+                ),
+                dmc.Stack(
+                    [
+                        dmc.Text(f"{w.net_kcal:,.0f}", size="sm", fw=700, ta="right"),
+                        dmc.Text("kcal extra", size="xs", c="dimmed", ta="right"),
+                    ],
+                    gap=0,
+                ),
+            ],
+            wrap="nowrap",
+            gap="sm",
+        ),
+        p="xs",
+        withBorder=True,
+        className="gwc-entry" if w.manual_id is not None else None,
+    )
+    if w.manual_id is None:
+        return row
+    return dmc.UnstyledButton(row, id={"type": "act-row", "index": w.manual_id}, w="100%")
 
 
 def _ring_stat(label: str, value: str, note: str | None = None) -> dmc.Stack:
@@ -434,6 +549,7 @@ def change_day(_prev, _next, _today, picked, selected):
     Output("targets-hint", "children"),
     Output("day-incomplete", "checked"),
     Output("day-entries", "children"),
+    Output("day-activities", "children"),
     Output("day-next", "disabled"),
     Output("day-ring", "sections"),
     Output("day-ring-stats", "children"),
@@ -459,6 +575,13 @@ def render_day(selected, _edited):
         incomplete = log.is_incomplete(s, day)
         entry_rows = [_entry_row(e, day) for e in entries] or [
             dmc.Text("Nothing logged for this day yet.", size="sm", c="dimmed")
+        ]
+        activity_rows = [_activity_row(w, day) for w in plan.workouts] or [
+            dmc.Text(
+                "No workouts. Garmin's appear after a sync; add anything else here.",
+                size="sm",
+                c="dimmed",
+            )
         ]
 
     if day == today:
@@ -494,6 +617,7 @@ def render_day(selected, _edited):
         hint,
         incomplete,
         entry_rows,
+        activity_rows,
         day >= today,
         ring,
         ring_stats,
@@ -521,6 +645,64 @@ def toggle_incomplete(checked, selected, done):
             raise PreventUpdate
         log.set_incomplete(s, day, bool(checked))
     return (done or 0) + 1
+
+
+@callback(
+    Output("act-modal", "opened", allow_duplicate=True),
+    Output("act-id", "data"),
+    Output("act-modal", "title"),
+    Output("act-name", "value"),
+    Output("act-kcal", "value"),
+    Output("act-delete", "display"),
+    Output("act-error", "children", allow_duplicate=True),
+    Input("act-add", "n_clicks"),
+    Input({"type": "act-row", "index": ALL}, "n_clicks"),
+    prevent_initial_call=True,
+)
+def open_activity(add_clicks, _rows):
+    if ctx.triggered_id == "act-add":
+        if not add_clicks:
+            raise PreventUpdate
+        return True, None, "Add activity", "", "", "none", ""
+    clicked = triggered_click()
+    if clicked is None:
+        raise PreventUpdate
+    with session_scope() as s:
+        activity = s.get(ManualActivity, clicked["index"])
+        if activity is None:
+            raise PreventUpdate
+        return True, activity.id, "Edit activity", activity.name, round(activity.kcal), "block", ""
+
+
+@callback(
+    Output("act-modal", "opened", allow_duplicate=True),
+    Output("edit-done", "data", allow_duplicate=True),
+    Output("act-error", "children", allow_duplicate=True),
+    Input("act-save", "n_clicks"),
+    Input("act-delete", "n_clicks"),
+    State("act-id", "data"),
+    State("act-name", "value"),
+    State("act-kcal", "value"),
+    State("day-selected", "data"),
+    State("edit-done", "data"),
+    prevent_initial_call=True,
+)
+def save_activity(save, delete, activity_id, name, kcal, selected, done):
+    if not (save or delete):
+        raise PreventUpdate
+    try:
+        with session_scope() as s:
+            if ctx.triggered_id == "act-delete":
+                if activity_id:
+                    exercise.delete_manual(s, int(activity_id))
+            elif activity_id:
+                exercise.update_manual(s, int(activity_id), name, kcal)
+            else:
+                day = date.fromisoformat(selected) if selected else current_food_day(s, tz(), now())
+                exercise.add_manual(s, day, name, kcal)
+    except ValueError as e:
+        return no_update, no_update, str(e)
+    return False, (done or 0) + 1, ""
 
 
 @callback(

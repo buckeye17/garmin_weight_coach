@@ -13,11 +13,11 @@ are frozen into `daily_target` the first time they're computed, so later
 syncs don't move them; changing the goal or overrides re-computes today.
 
 Workouts: the frozen targets start from burn without workouts, and each food
-day adds `eat_back_pct` of its own Garmin workouts' net kcal (exercise.py),
-live, so a sync after a workout raises that day's calories, on top of a
-manual calorie override too. The extra goes 25/75 to fat/carbs (whichever
-isn't overridden), with fiber and sugar scaled along. Days recorded before
-this existed have no `eat_back_pct` and get no adjustment.
+day adds `eat_back_pct` of its own workouts' net kcal (exercise.py): Garmin's,
+and any entered in the app. It's live, so a sync after a workout raises that
+day's calories, on top of a manual calorie override too. The extra goes 25/75
+to fat/carbs (whichever isn't overridden), with fiber and sugar scaled along.
+Days recorded before this existed have no `eat_back_pct` and get no adjustment.
 
 Steps: the base also leaves out above-usual steps, and each food day adds
 `step_pct` of its own active kcal outside workouts above `typical_step_kcal`,

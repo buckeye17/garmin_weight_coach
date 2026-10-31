@@ -9,6 +9,9 @@ from gwc.analysis import energy, targets
 from gwc.analysis.days import DayRecord, load_days
 from gwc.analysis.exercise import (
     EAT_BACK_PREF,
+    add_manual,
+    delete_manual,
+    manual_by_food_day,
     net_by_calendar_date,
     net_kcal,
     workouts_by_food_day,
@@ -136,6 +139,18 @@ def test_garmin_tdee_base_leaves_out_workouts():
     est = garmin_tdee(days)
     assert est.kcal == 3000 and est.exercise_kcal == pytest.approx(100)
     assert est.base_kcal == pytest.approx(2900)
+
+
+def test_only_adaptive_burn_counts_workouts_entered_in_the_app():
+    # Garmin's totals never saw them, so its base mustn't take them out.
+    days = [rec(i, garmin=3000, manual_exercise=700 if i == 3 else 0) for i in range(7)]
+    assert garmin_tdee(days).base_kcal == pytest.approx(3000)
+    # Weight change does reflect them, so the trend-based base leaves them out.
+    records, weighins = _losing(21, 2500, -0.1)
+    records[5] = rec(5, kcal=2500, manual_exercise=420)
+    est = adaptive_tdee(records, weighins, rho=7700, window=21)
+    assert est.exercise_kcal == pytest.approx(20)
+    assert est.base_kcal == pytest.approx(2500 + 770 - 20)
 
 
 def test_garmin_tdee_base_leaves_out_above_usual_steps():
@@ -617,3 +632,42 @@ def test_days_recorded_before_workouts_get_no_adjustment(db):
         plan = targets.day_targets(s, NY, NOW, today)
         assert plan.values["kcal"] == 2800 and plan.workout_kcal == 0
         assert targets.frozen_targets(s, NY, today, today) == {today: 2800}
+
+
+def test_workouts_entered_in_the_app_raise_their_days_targets(db):
+    today = date(2026, 10, 20)
+    with session_scope() as s:
+        _seed(s)
+        s.add(DailySummary(calendar_date=today, active_kcal=1000, is_provisional=True))
+    with session_scope() as s:
+        before = targets.day_targets(s, NY, NOW, today)
+        add_manual(s, today, "  Sand volleyball ", 400)
+        add_manual(s, today - timedelta(days=1), "", 200)
+    with session_scope() as s:
+        after = targets.day_targets(s, NY, NOW, today)
+        (w,) = after.workouts
+        assert (w.name, w.net_kcal, w.start_at) == ("Sand volleyball", 400, None)
+        assert w.as_dict()["entered_in_app"]
+        assert after.workout_kcal == 300  # 75 % of the guess, used as-is
+        assert after.values["kcal"] == before.values["kcal"] + 300
+        # Garmin's active kcal doesn't include it, so step credit is unchanged.
+        assert after.step_credit_kcal == before.step_credit_kcal
+        assert net_by_calendar_date(s, NY, today, today) == {}
+        assert targets.frozen_targets(s, NY, today, today) == {today: after.values["kcal"]}
+        assert manual_by_food_day(s, today - timedelta(days=1), today) == {
+            today - timedelta(days=1): 200,
+            today: 400,
+        }
+        (yesterday,) = load_days(s, NY, today - timedelta(days=1), today - timedelta(days=1))
+        assert yesterday.manual_exercise == 200 and yesterday.garmin_exercise == 0
+    assert workout_summary(after).startswith("+300 kcal for Sand volleyball: 75% of 400 kcal")
+    with session_scope() as s:
+        delete_manual(s, w.manual_id)
+    with session_scope() as s:
+        assert targets.day_targets(s, NY, NOW, today).workout_kcal == 0
+
+
+@pytest.mark.parametrize("kcal", [None, "", 0, -50, 3001])
+def test_manual_activity_needs_a_sensible_guess(db, kcal):
+    with session_scope() as s, pytest.raises(ValueError):
+        add_manual(s, D0, "Hike", kcal)

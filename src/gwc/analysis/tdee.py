@@ -14,6 +14,8 @@
 Both include whatever workouts you did. `exercise_kcal` is the average net
 workout burn over the same days, and `base_kcal` is the estimate without it:
 targets start from the base and add each day's own workouts (exercise.py).
+Garmin's totals don't include workouts entered in the app, so its average leaves
+them out; the adaptive one counts them, since your weight reflects them.
 
 Steps likewise: `typical_step_kcal` is the median of Garmin's active kcal outside
 workouts on the same days, and `step_kcal` the average amount above it. The base
@@ -200,7 +202,7 @@ def adaptive_tdee(
         days_used=len(complete),
         intake_kcal=intake,
         slope_kg_per_week=slope * 7,
-        exercise_kcal=statistics.fmean(d.garmin_exercise for d in days),
+        exercise_kcal=statistics.fmean(d.garmin_exercise + d.manual_exercise for d in days),
         **step_stats(days),
     )
 

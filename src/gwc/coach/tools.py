@@ -18,7 +18,7 @@ from gwc.analysis.targets import day_targets, goal_kg_per_month
 from gwc.analysis.units import kg_to, weight_unit
 from gwc.coach.llm import ToolSpec
 from gwc.config import get_settings
-from gwc.db.models import Activity, BodyComp, Sleep
+from gwc.db.models import Activity, BodyComp, ManualActivity, Sleep
 from gwc.db.session import session_scope
 from gwc.db.types import utcnow
 from gwc.nutrition import foods, log
@@ -295,6 +295,11 @@ def get_activities(args: dict[str, Any]) -> dict[str, Any]:
         rows = s.scalars(
             select(Activity).where(Activity.start_at >= since).order_by(Activity.start_at)
         ).all()
+        manual = s.scalars(
+            select(ManualActivity)
+            .where(ManualActivity.food_day >= since.astimezone(tz).date())
+            .order_by(ManualActivity.food_day, ManualActivity.id)
+        ).all()
         return {
             "activities": [
                 {
@@ -307,7 +312,15 @@ def get_activities(args: dict[str, Any]) -> dict[str, Any]:
                     "avg_hr": a.avg_hr,
                 }
                 for a in rows
-            ]
+            ],
+            "entered_in_app": [
+                {
+                    "food_day": m.food_day.isoformat(),
+                    "name": m.name,
+                    "kcal_above_resting": _r(m.kcal, 0),
+                }
+                for m in manual
+            ],
         }
 
 
@@ -501,7 +514,8 @@ def data_tools() -> list[ToolSpec]:
         ),
         ToolSpec(
             "get_activities",
-            "Recorded Garmin activities with type, duration, distance, kcal and heart rate.",
+            "Recorded Garmin activities with type, duration, distance, kcal and heart rate, "
+            "plus workouts the user entered in the app with their guess at kcal above resting.",
             DAYS_SCHEMA,
             get_activities,
             lambda _a: "Reading your activities…",

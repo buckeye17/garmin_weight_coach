@@ -10,6 +10,11 @@ Steps outside workouts are credited the same way but more cautiously: a share
 (`STEPS_PREF`, default 50 %) of the day's active kcal outside workouts above your
 usual amount (tdee.py), rounded down. Garmin's active kcal accrues through the
 day, so a day in progress only earns credit once it has passed a whole usual day.
+
+Workouts entered in the app (`ManualActivity`) are the user's guess at calories
+above resting, so that guess is their net. They belong to a food day directly and
+count toward its target like Garmin's. Garmin's daily totals don't include them,
+so they stay out of `net_by_calendar_date` (steps, and the Garmin burn's base).
 """
 
 import statistics
@@ -22,28 +27,31 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from gwc.analysis.food_day import FoodDays
-from gwc.db.models import Activity, DailySummary
+from gwc.db.models import Activity, DailySummary, ManualActivity
 
 EAT_BACK_PREF = "targets.exercise_eat_back_pct"
 STEPS_PREF = "targets.steps_eat_back_pct"
 SECONDS_PER_DAY = 86_400
+MAX_MANUAL_KCAL = 3000
 
 
 @dataclass(frozen=True)
 class Workout:
     name: str
-    start_at: datetime
+    start_at: datetime | None  # None for workouts entered in the app
     duration_s: float | None
     kcal: float  # Garmin's total for the activity
     net_kcal: float  # above resting burn
+    manual_id: int | None = None  # the `ManualActivity` behind one entered in the app
 
     def as_dict(self) -> dict:
         return {
             "name": self.name,
-            "start_at": self.start_at.isoformat(),
+            "start_at": self.start_at.isoformat() if self.start_at else None,
             "minutes": round(self.duration_s / 60) if self.duration_s else None,
             "kcal": round(self.kcal),
             "net_kcal": round(self.net_kcal),
+            "entered_in_app": self.manual_id is not None,
         }
 
 
@@ -95,15 +103,70 @@ def _load(s: Session, tz: ZoneInfo, start: datetime, end: datetime) -> list[Work
     ]
 
 
+def _manual(s: Session, start: date, end: date) -> list[ManualActivity]:
+    return list(
+        s.scalars(
+            select(ManualActivity)
+            .where(ManualActivity.food_day >= start, ManualActivity.food_day <= end)
+            .order_by(ManualActivity.food_day, ManualActivity.id)
+        )
+    )
+
+
 def workouts_by_food_day(
     s: Session, tz: ZoneInfo, start: date, end: date, fd: FoodDays | None = None
 ) -> dict[date, list[Workout]]:
-    """Workouts grouped by the food day they started in, for food days `start`..`end`."""
+    """Workouts grouped by the food day they started in, for food days `start`..`end`.
+
+    Garmin's come first, oldest first, then any entered in the app.
+    """
     fd = fd or FoodDays.load(s, tz, start, end)
     out: dict[date, list[Workout]] = defaultdict(list)
     for w in _load(s, tz, fd.start_of(start), fd.end_of(end)[0]):
         out[fd.day_of(w.start_at)].append(w)
+    for m in _manual(s, start, end):
+        out[m.food_day].append(Workout(m.name, None, None, m.kcal, m.kcal, manual_id=m.id))
     return dict(out)
+
+
+def manual_by_food_day(s: Session, start: date, end: date) -> dict[date, float]:
+    """Kcal above resting of workouts entered in the app, per food day."""
+    out: dict[date, float] = defaultdict(float)
+    for m in _manual(s, start, end):
+        out[m.food_day] += m.kcal
+    return dict(out)
+
+
+def _clean_manual(name: str | None, kcal: float | None) -> tuple[str, float]:
+    if kcal is None or kcal == "":
+        raise ValueError("Enter the extra calories you think it burned.")
+    kcal = float(kcal)
+    if kcal <= 0:
+        raise ValueError("Extra calories must be more than 0.")
+    if kcal > MAX_MANUAL_KCAL:
+        raise ValueError(f"Enter a guess of {MAX_MANUAL_KCAL:,} kcal or less.")
+    return ((name or "").strip() or "Activity")[:255], kcal
+
+
+def add_manual(s: Session, food_day: date, name: str | None, kcal: float | None) -> ManualActivity:
+    name, kcal = _clean_manual(name, kcal)
+    activity = ManualActivity(food_day=food_day, name=name, kcal=kcal)
+    s.add(activity)
+    s.flush()
+    return activity
+
+
+def update_manual(s: Session, activity_id: int, name: str | None, kcal: float | None) -> None:
+    activity = s.get(ManualActivity, activity_id)
+    if activity is None:
+        raise ValueError("That activity no longer exists.")
+    activity.name, activity.kcal = _clean_manual(name, kcal)
+
+
+def delete_manual(s: Session, activity_id: int) -> None:
+    activity = s.get(ManualActivity, activity_id)
+    if activity is not None:
+        s.delete(activity)
 
 
 def net_by_calendar_date(s: Session, tz: ZoneInfo, start: date, end: date) -> dict[date, float]:

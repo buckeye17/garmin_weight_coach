@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from gwc.analysis.exercise import net_by_calendar_date
+from gwc.analysis.exercise import manual_by_food_day, net_by_calendar_date
 from gwc.analysis.food_day import FoodDays
 from gwc.db.models import DailySummary
 from gwc.nutrition import log
@@ -26,6 +26,8 @@ class DayRecord:
     garmin_provisional: bool
     # Net kcal of Garmin workouts on the same calendar date as `garmin_total`.
     garmin_exercise: float = 0.0
+    # Kcal above resting of workouts entered in the app, which Garmin's totals don't include.
+    manual_exercise: float = 0.0
 
     @property
     def complete(self) -> bool:
@@ -66,6 +68,7 @@ def load_days(s: Session, tz: ZoneInfo, start: date, end: date) -> list[DayRecor
         )
     }
     exercise = net_by_calendar_date(s, tz, start, end)
+    manual = manual_by_food_day(s, start, end)
     out = []
     day = start
     while day <= end:
@@ -83,6 +86,7 @@ def load_days(s: Session, tz: ZoneInfo, start: date, end: date) -> list[DayRecor
                 steps=g.steps if g else None,
                 garmin_provisional=bool(g and g.is_provisional),
                 garmin_exercise=exercise.get(day, 0.0),
+                manual_exercise=manual.get(day, 0.0),
             )
         )
         day += timedelta(days=1)

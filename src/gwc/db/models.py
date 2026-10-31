@@ -131,6 +131,17 @@ class Activity(TimestampMixin, Base):
     avg_hr: Mapped[int | None] = mapped_column(Integer)
 
 
+class ManualActivity(TimestampMixin, Base):
+    """A workout entered in the app, with the user's guess at the calories it added."""
+
+    __tablename__ = "manual_activity"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    food_day: Mapped[date] = mapped_column(Date, index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    kcal: Mapped[float] = mapped_column(Float)  # above resting
+
+
 class SyncKind(StrEnum):
     BACKFILL = "backfill"
     SCHEDULED = "scheduled"
