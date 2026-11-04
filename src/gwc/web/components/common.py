@@ -5,7 +5,7 @@ from fractions import Fraction
 from zoneinfo import ZoneInfo
 
 import dash_mantine_components as dmc
-from dash import ctx
+from dash import ctx, dcc
 from dash_iconify import DashIconify
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -120,6 +120,28 @@ def triggered_click() -> dict | None:
         return None
     tid = ctx.triggered_id
     return tid if isinstance(tid, dict) else None
+
+
+def chat_bubble(role: str, content: str, model: str | None = None) -> dmc.Group:
+    """One message of a conversation: the user's on the right, Claude's in Markdown on the left."""
+    if role == "user":
+        return dmc.Group(
+            dmc.Paper(
+                dmc.Text(content, size="sm", style={"whiteSpace": "pre-wrap"}),
+                p="sm",
+                radius="lg",
+                bg="var(--mantine-color-brand-light)",
+                maw="85%",
+            ),
+            justify="flex-end",
+        )
+    children = [dcc.Markdown(content, className="coach-md")]
+    if model:
+        children.append(dmc.Text(model, size="xs", c="dimmed"))
+    return dmc.Group(
+        dmc.Paper(dmc.Stack(children, gap=2), p="sm", radius="lg", withBorder=True, maw="95%"),
+        justify="flex-start",
+    )
 
 
 def card(children, **kwargs) -> dmc.Card:

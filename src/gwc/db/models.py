@@ -229,6 +229,8 @@ class Food(TimestampMixin, NutrientsPer100gMixin, Base):
     recipe_yield_g: Mapped[float | None] = mapped_column(Float)
     # Where the nutrition came from, e.g. a restaurant's nutrition page.
     source_url: Mapped[str | None] = mapped_column(String(1024))
+    # How sure those numbers are: official or third-party, or numbers the user overrode.
+    source_note: Mapped[str | None] = mapped_column(Text)
     is_favorite: Mapped[bool] = mapped_column(Boolean, default=False)
     is_archived: Mapped[bool] = mapped_column(Boolean, default=False)
 
@@ -372,11 +374,25 @@ class Setting(TimestampMixin, Base):
     value: Mapped[Any]
 
 
+class ChainSource(TimestampMixin, Base):
+    """Where a restaurant chain publishes its nutrition, as found by earlier lookups."""
+
+    __tablename__ = "chain_source"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    chain: Mapped[str] = mapped_column(String(255), unique=True)  # lower case
+    url: Mapped[str] = mapped_column(String(1024))
+    # False: real, but web tools can't read it (a script-built calculator, or bots are blocked).
+    readable: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
 class CoachConversation(TimestampMixin, Base):
     __tablename__ = "coach_conversation"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     title: Mapped[str] = mapped_column(String(255))
+    # The logged entry this conversation questions ("Question this" on Today).
+    food_log_id: Mapped[int | None] = mapped_column(ForeignKey("food_log.id", ondelete="SET NULL"))
 
     messages: Mapped[list["CoachMessage"]] = relationship(
         back_populates="conversation",
@@ -398,6 +414,26 @@ class CoachMessage(Base):
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
     conversation: Mapped[CoachConversation] = relationship(back_populates="messages")
+
+
+class CoachProposal(Base):
+    """A change to a logged entry the coach suggested; only the user can apply it."""
+
+    __tablename__ = "coach_proposal"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("coach_conversation.id", ondelete="CASCADE"), index=True
+    )
+    food_log_id: Mapped[int | None] = mapped_column(ForeignKey("food_log.id", ondelete="SET NULL"))
+    changes: Mapped[str] = mapped_column(Text)  # JSON {nutrient key: total as eaten}
+    before: Mapped[str] = mapped_column(Text)  # JSON: those nutrients when suggested or applied
+    reason: Mapped[str] = mapped_column(Text)
+    source: Mapped[str | None] = mapped_column(Text)
+    update_library: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    decided_at: Mapped[datetime | None] = mapped_column()
 
 
 class CoachSummary(Base):

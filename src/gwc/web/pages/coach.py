@@ -3,10 +3,19 @@ import dash_mantine_components as dmc
 from dash import ALL, Input, Output, State, callback, ctx, dcc, no_update
 from dash.exceptions import PreventUpdate
 
-from gwc.coach import chat, summary
+from gwc.coach import chat, proposals, summary
 from gwc.coach.jobs import get_jobs
 from gwc.coach.settings import WEEKDAYS, summary_enabled, summary_weekday
-from gwc.web.components.common import icon, now, page_header, triggered_click, tz
+from gwc.db.models import FoodLog
+from gwc.db.session import session_scope
+from gwc.web.components.common import (
+    chat_bubble,
+    icon,
+    now,
+    page_header,
+    triggered_click,
+    tz,
+)
 from gwc.web.format import fmt_day
 
 POLL_MS = 1000
@@ -18,28 +27,7 @@ SUGGESTIONS = [
 ]
 
 
-def _bubble(role: str, content: str, model: str | None = None) -> dmc.Group:
-    if role == "user":
-        return dmc.Group(
-            dmc.Paper(
-                dmc.Text(content, size="sm", style={"whiteSpace": "pre-wrap"}),
-                p="sm",
-                radius="lg",
-                bg="var(--mantine-color-brand-light)",
-                maw="85%",
-            ),
-            justify="flex-end",
-        )
-    children = [dcc.Markdown(content, className="coach-md")]
-    if model:
-        children.append(dmc.Text(model, size="xs", c="dimmed"))
-    return dmc.Group(
-        dmc.Paper(dmc.Stack(children, gap=2), p="sm", radius="lg", withBorder=True, maw="95%"),
-        justify="flex-start",
-    )
-
-
-def _chat_panel() -> dmc.Stack:
+def _chat_panel(entry_id: int | None = None) -> dmc.Stack:
     return dmc.Stack(
         [
             dmc.Group(
@@ -67,7 +55,9 @@ def _chat_panel() -> dmc.Stack:
                 wrap="nowrap",
                 gap="xs",
             ),
+            dmc.Box(id="coach-about"),
             dmc.Stack(id="coach-messages", gap="sm"),
+            dmc.Stack(id="coach-proposals", gap="xs"),
             dmc.Group(
                 [
                     dmc.Paper(
@@ -115,7 +105,11 @@ def _chat_panel() -> dmc.Stack:
                 [
                     dmc.Textarea(
                         id="coach-input",
-                        placeholder="Ask about your weight, food, sleep or training…",
+                        placeholder=(
+                            "What looks off about this entry?"
+                            if entry_id
+                            else "Ask about your weight, food, sleep or training…"
+                        ),
                         autosize=True,
                         minRows=1,
                         maxRows=6,
@@ -133,6 +127,7 @@ def _chat_panel() -> dmc.Stack:
                 gap="xs",
             ),
             dcc.Store(id="coach-conv-id", storage_type="session"),
+            dcc.Store(id="coach-entry", data=entry_id),  # questioning this entry (not yet sent)
             dcc.Store(id="coach-job"),
             dcc.Store(id="coach-refresh", data=0),
             dcc.Interval(id="coach-poll", interval=POLL_MS, disabled=True),
@@ -184,13 +179,23 @@ def _summary_panel() -> dmc.Stack:
     )
 
 
-def layout(**_kwargs):
+def _entry_param(value) -> int | None:
+    try:
+        return int(value) if value else None
+    except (TypeError, ValueError):
+        return None
+
+
+def layout(entry=None, **_kwargs):
+    entry_id = _entry_param(entry)
+    # Question this always lands on the chat, whichever tab was open last.
+    tab_state = {"value": "chat"} if entry_id else {"value": "chat", "persistence": True}
     return dmc.Stack(
         [
             page_header(
                 "Coach",
                 "tabler:message-chatbot",
-                "Ask about your data, or read the weekly summaries.",
+                "Ask about your data, question a logged food, or read the weekly summaries.",
             ),
             dmc.Tabs(
                 [
@@ -205,11 +210,10 @@ def layout(**_kwargs):
                         ],
                         grow=True,
                     ),
-                    dmc.TabsPanel(_chat_panel(), value="chat"),
+                    dmc.TabsPanel(_chat_panel(entry_id), value="chat"),
                     dmc.TabsPanel(_summary_panel(), value="summaries"),
                 ],
-                value="chat",
-                persistence=True,
+                **tab_state,
                 id="coach-tabs",
             ),
             dmc.Text(
@@ -239,16 +243,26 @@ def _conv_id(value) -> int | None:
     Output("coach-suggestions", "display"),
     Input("coach-conv-id", "data"),
     Input("coach-refresh", "data"),
+    Input("coach-entry", "data"),
 )
-def render_chat(conv_id, _refresh):
-    conv_id = _conv_id(conv_id)
+def render_chat(conv_id, _refresh, entry_id=None):
+    conv_id = None if entry_id else _conv_id(conv_id)  # an entry starts a new conversation
     convs = chat.list_conversations()
     data = [{"value": str(c.id), "label": c.title} for c in convs]
     if conv_id is not None and not any(c.id == conv_id for c in convs):
         conv_id = None
     msgs = chat.messages(conv_id) if conv_id else []
-    bubbles = [_bubble(m.role, m.content, m.model) for m in msgs]
-    if not bubbles:
+    bubbles = [chat_bubble(m.role, m.content, m.model) for m in msgs]
+    if entry_id:
+        bubbles = [
+            dmc.Text(
+                "Say what looks off. The coach can look it up, and suggest a change you can "
+                "apply or dismiss. Nothing changes unless you press Apply.",
+                size="sm",
+                c="dimmed",
+            )
+        ]
+    elif not bubbles:
         bubbles = [
             dmc.Text(
                 "Ask the coach anything about your data. It reads your weigh-ins, food log, "
@@ -257,25 +271,29 @@ def render_chat(conv_id, _refresh):
                 c="dimmed",
             )
         ]
-    return data, str(conv_id) if conv_id else None, bubbles, "none" if msgs else "flex"
+    suggestions = "none" if msgs or entry_id else "flex"
+    return data, str(conv_id) if conv_id else None, bubbles, suggestions
 
 
 @callback(
     Output("coach-conv-id", "data", allow_duplicate=True),
+    Output("coach-entry", "data", allow_duplicate=True),
     Input("coach-conv", "value"),
     State("coach-conv-id", "data"),
+    State("coach-entry", "data"),
     prevent_initial_call=True,
 )
-def pick_conversation(value, current):
+def pick_conversation(value, current, entry_id=None):
     value = _conv_id(value)
-    if value == _conv_id(current):
+    if value is None or (value == _conv_id(current) and not entry_id):
         raise PreventUpdate
-    return value
+    return value, None
 
 
 @callback(
     Output("coach-conv-id", "data", allow_duplicate=True),
     Output("coach-refresh", "data", allow_duplicate=True),
+    Output("coach-entry", "data", allow_duplicate=True),
     Input("coach-new", "n_clicks"),
     Input("coach-delete", "n_clicks"),
     State("coach-conv-id", "data"),
@@ -285,7 +303,7 @@ def pick_conversation(value, current):
 def new_or_delete(_new, _delete, conv_id, refresh):
     if ctx.triggered_id == "coach-delete" and _conv_id(conv_id):
         chat.delete_conversation(_conv_id(conv_id))
-    return None, (refresh or 0) + 1
+    return None, (refresh or 0) + 1, None
 
 
 @callback(
@@ -295,15 +313,17 @@ def new_or_delete(_new, _delete, conv_id, refresh):
     Output("coach-conv-id", "data", allow_duplicate=True),
     Output("coach-refresh", "data", allow_duplicate=True),
     Output("coach-error", "children"),
+    Output("coach-entry", "data", allow_duplicate=True),
     Input("coach-send", "n_clicks"),
     Input({"type": "coach-suggest", "index": ALL}, "n_clicks"),
     State("coach-input", "value"),
     State("coach-conv-id", "data"),
     State("coach-refresh", "data"),
     State("coach-job", "data"),
+    State("coach-entry", "data"),
     prevent_initial_call=True,
 )
-def send(_send, _suggest, text, conv_id, refresh, job_id):
+def send(_send, _suggest, text, conv_id, refresh, job_id, entry_id=None):
     if ctx.triggered_id == "coach-send":
         if not ctx.triggered[0].get("value"):
             raise PreventUpdate
@@ -317,8 +337,106 @@ def send(_send, _suggest, text, conv_id, refresh, job_id):
         raise PreventUpdate
     if not text or not text.strip():
         raise PreventUpdate
-    new_id, job = chat.send(_conv_id(conv_id), text, tz(), now())
-    return job.id, False, "", new_id, (refresh or 0) + 1, None
+    conv = None if entry_id else _conv_id(conv_id)  # an entry starts its own conversation
+    new_id, job = chat.send(conv, text, tz(), now(), food_log_id=entry_id)
+    return job.id, False, "", new_id, (refresh or 0) + 1, None, None
+
+
+def _about(entry_id: int | None) -> dmc.Alert | None:
+    if not entry_id:
+        return None
+    with session_scope() as s:
+        entry = s.get(FoodLog, entry_id)
+        if entry is None:
+            return None
+        day = fmt_day(entry.eaten_at.astimezone(tz()).date())
+        text = f"{entry.description}: {entry.kcal:,.0f} kcal, logged for {day}."
+    return dmc.Alert(text, title="About this entry", color="brand", variant="light", p="xs")
+
+
+def proposal_card(view: proposals.ProposalView) -> dmc.Paper:
+    """A change the coach suggested, with the user's decision: nothing changes until Apply."""
+    lines = [
+        dmc.Text(view.entry_name or "Deleted entry", size="sm", fw=600),
+        dmc.Text(proposals.describe_changes(view), size="sm"),
+        dmc.Text(view.reason, size="xs", c="dimmed"),
+    ]
+    if view.source:
+        lines.append(dmc.Text(f"Source: {view.source}", size="xs", c="dimmed"))
+    if view.update_library:
+        lines.append(
+            dmc.Text(f"Also corrects {view.library_food} in your library.", size="xs", c="dimmed")
+        )
+    elif view.library_food:
+        lines.append(
+            dmc.Text(
+                f"Only this entry changes: it stops following {view.library_food} in your library.",
+                size="xs",
+                c="dimmed",
+            )
+        )
+    if view.status == "pending" and view.entry_id:
+        lines.append(
+            dmc.Group(
+                [
+                    dmc.Button(
+                        "Dismiss",
+                        id={"type": "coach-proposal-dismiss", "index": view.id},
+                        variant="subtle",
+                        color="gray",
+                        size="xs",
+                    ),
+                    dmc.Button(
+                        "Apply",
+                        id={"type": "coach-proposal-apply", "index": view.id},
+                        size="xs",
+                        leftSection=icon("tabler:check", 14),
+                    ),
+                ],
+                justify="flex-end",
+                gap="xs",
+            )
+        )
+    else:
+        words = {"applied": "Applied", "dismissed": "Dismissed"}
+        lines.append(dmc.Text(words.get(view.status, "No longer open"), size="xs", c="dimmed"))
+    return dmc.Paper(dmc.Stack(lines, gap=4), p="sm", withBorder=True)
+
+
+@callback(
+    Output("coach-proposals", "children"),
+    Output("coach-about", "children"),
+    Input("coach-conv-id", "data"),
+    Input("coach-refresh", "data"),
+    Input("coach-entry", "data"),
+)
+def render_proposals(conv_id, _refresh, entry_id):
+    conv_id = None if entry_id else _conv_id(conv_id)
+    cards = [proposal_card(v) for v in proposals.for_conversation(conv_id)] if conv_id else []
+    return cards, _about(entry_id or chat.conversation_entry(conv_id))
+
+
+@callback(
+    Output("coach-refresh", "data", allow_duplicate=True),
+    Output("coach-error", "children", allow_duplicate=True),
+    Input({"type": "coach-proposal-apply", "index": ALL}, "n_clicks"),
+    Input({"type": "coach-proposal-dismiss", "index": ALL}, "n_clicks"),
+    State("coach-refresh", "data"),
+    prevent_initial_call=True,
+)
+def decide_proposal(_apply, _dismiss, refresh):
+    clicked = triggered_click()
+    if clicked is None:
+        raise PreventUpdate
+    error = None
+    if clicked["type"] == "coach-proposal-apply":
+        try:
+            proposals.apply(clicked["index"])
+        except ValueError as e:
+            error = dmc.Alert(str(e), color="red", variant="light")
+    else:
+        proposals.dismiss(clicked["index"])
+    return (refresh or 0) + 1, error
 
 
 @callback(

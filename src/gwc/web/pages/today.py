@@ -127,6 +127,14 @@ def _edit_modal() -> dmc.Modal:
                     justify="space-between",
                     display="none",
                 ),
+                dmc.Anchor(
+                    dmc.Group(
+                        [icon("tabler:message-question", 14), "Question these numbers"], gap=4
+                    ),
+                    id="edit-question",
+                    href="/coach",
+                    size="sm",
+                ),
                 dmc.Text(id="edit-msg", c="brand", size="sm"),
                 dmc.Text(id="edit-error", c="red", size="sm"),
                 dmc.Group(
@@ -703,6 +711,15 @@ def save_activity(save, delete, activity_id, name, kcal, selected, done):
     except ValueError as e:
         return no_update, no_update, str(e)
     return False, (done or 0) + 1, ""
+
+
+@callback(
+    Output("edit-question", "href"),
+    Input("edit-entry-id", "data"),
+    prevent_initial_call=True,
+)
+def question_link(entry_id):
+    return f"/coach?entry={entry_id}" if entry_id else "/coach"
 
 
 @callback(

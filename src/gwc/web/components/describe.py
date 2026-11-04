@@ -10,6 +10,11 @@ one review list, and the page's mode decides what its buttons do with them:
 - "ask": show how the rows would change today's totals, then log or save them.
 - "library": save the included rows to the library.
 
+The user can reply to what Claude found: question a number, change an item or answer
+a question it asked. Claude returns only what changes, and nothing is logged until
+they press Log. Any published row can also take the user's own numbers, and the
+entry's note keeps both.
+
 Rows matched to a record scale with their grams input. Rows without one (Claude's
 estimates, restaurant items it couldn't find, labels) show nutrient inputs for one
 portion, times a portion count. Edits are kept in `ai-edits`, so adding a row
@@ -40,7 +45,9 @@ from gwc.coach.parse import (
     label_row,
     library_row,
     match_row,
+    override_row,
     parse_description,
+    reply_to_review,
     retime,
     save_items,
 )
@@ -48,7 +55,16 @@ from gwc.db.session import session_scope
 from gwc.nutrition import barcode, foods, log
 from gwc.nutrition.nutrients import BY_KEY, NUTRIENT_KEYS, add, per100_of, zero
 from gwc.nutrition.service import get_off, get_usda
-from gwc.web.components.common import from_picker, icon, now, to_picker, tz, when_inputs
+from gwc.web.components.common import (
+    chat_bubble,
+    from_picker,
+    icon,
+    now,
+    to_picker,
+    triggered_click,
+    tz,
+    when_inputs,
+)
 from gwc.web.components.nutrient_bars import nutrient_bars
 
 POLL_MS = 1000
@@ -59,6 +75,7 @@ SOURCE_LABELS = {
     "estimate": "Estimate",
     "barcode": "Barcode",
     "label": "Label",
+    "user": "Your numbers",
 }
 SOURCE_COLORS = {
     "my_food": "brand",
@@ -67,6 +84,7 @@ SOURCE_COLORS = {
     "estimate": "orange",
     "barcode": "cyan",
     "label": "teal",
+    "user": "grape",
 }
 SHORT_LABELS = {"kcal": "Calories", "sodium_mg": "Sodium (mg)"}
 BARCODE_TEXT = re.compile(r"\d{8,14}")
@@ -174,6 +192,37 @@ def describe_panel(mode: str, day: date | None = None) -> dmc.Stack:
                 gap="xs",
             ),
             dmc.Text(HELP[mode], size="xs", c="dimmed"),
+            dmc.Stack(id="ai-review", gap="xs"),
+            dmc.Stack(
+                [
+                    dmc.Stack(id="ai-thread", gap="xs"),
+                    dmc.Group(id="ai-options", gap="xs"),
+                    dmc.Group(
+                        [
+                            dmc.Textarea(
+                                id="ai-reply",
+                                placeholder="Question a number, change an item, or answer…",
+                                autosize=True,
+                                minRows=1,
+                                maxRows=5,
+                                flex=1,
+                            ),
+                            dmc.ActionIcon(
+                                icon("tabler:send", 18),
+                                id="ai-reply-send",
+                                size="lg",
+                                **{"aria-label": "Send reply"},
+                            ),
+                        ],
+                        wrap="nowrap",
+                        align="flex-end",
+                        gap="xs",
+                    ),
+                ],
+                id="ai-discuss",
+                gap="xs",
+                display="none",
+            ),
             dmc.Group(
                 [dmc.Loader(size="xs"), dmc.Text(id="ai-activity", size="sm", c="dimmed")],
                 id="ai-status",
@@ -181,7 +230,6 @@ def describe_panel(mode: str, day: date | None = None) -> dmc.Stack:
                 display="none",
             ),
             dmc.Box(id="ai-error"),
-            dmc.Stack(id="ai-review", gap="xs"),
             dmc.Box(when_inputs("ai"), id="ai-when", display="none"),
             dmc.Box(id="ai-effect"),
             dmc.Group(
@@ -195,8 +243,9 @@ def describe_panel(mode: str, day: date | None = None) -> dmc.Stack:
             ),
             dcc.Store(id="ai-mode", data=mode),
             dcc.Store(id="ai-day", data=day.isoformat() if day else None),
-            dcc.Store(id="ai-job"),  # {"id", "kind": "parse" | "label"}
-            dcc.Store(id="ai-items"),  # {"items": [review rows], "message"}
+            dcc.Store(id="ai-job"),  # {"id", "kind": "parse" | "reply" | "label"}
+            # {"items": [review rows], "message", "question", "thread" (for Claude), "chat"}
+            dcc.Store(id="ai-items"),
             dcc.Store(id="ai-edits", data={}),  # {row key: what's entered in its inputs}
             dcc.Store(id="ai-first"),  # the earliest row's time, last put in the picker
             dcc.Store(id="ai-today"),  # {"so_far", "targets"}, for Ask's preview
@@ -225,23 +274,52 @@ def prefill(row: dict) -> dict[str, float | None]:
     return {k: round(totals[k], BY_KEY[k].decimals) for k in NUTRIENT_KEYS}
 
 
+def _host(url: str) -> str:
+    return urlparse(url).netloc.removeprefix("www.") or "source"
+
+
+def _override_line(row: dict) -> dmc.Text:
+    override = row.get("override") or {}
+    text = "Your numbers"
+    if override.get("said_source"):
+        text += f", from {override['said_source']}"
+    text += "."
+    if override.get("published_kcal"):
+        text += f" Published: {override['published_kcal']:,.0f} kcal"
+        if override.get("published_source"):
+            text += f" ({override['published_source']})"
+        text += "."
+    return dmc.Text(text, size="xs", c="grape")
+
+
 def _source_line(row: dict) -> dmc.Text | dmc.Group | None:
     rest = row.get("restaurant") or {}
     match = row.get("match") or {}
+    if row.get("source") == "user":
+        return _override_line(row)
     if row.get("source") == "restaurant" and rest.get("source_url"):
-        host = urlparse(rest["source_url"]).netloc.removeprefix("www.") or "source"
         official = rest.get("source_kind") == "official"
-        return dmc.Group(
-            [
-                dmc.Text(
-                    "Official nutrition:" if official else "Third-party nutrition:",
+        parts = [
+            dmc.Text(
+                "Official nutrition:" if official else "Third-party nutrition:",
+                size="xs",
+                c="violet" if official else "orange",
+            ),
+            dmc.Anchor(
+                _host(rest["source_url"]), href=rest["source_url"], target="_blank", size="xs"
+            ),
+        ]
+        if not official and rest.get("official_url"):
+            parts += [
+                dmc.Text("· compare with the official", size="xs", c="dimmed"),
+                dmc.Anchor(
+                    _host(rest["official_url"]),
+                    href=rest["official_url"],
+                    target="_blank",
                     size="xs",
-                    c="violet" if official else "orange",
                 ),
-                dmc.Anchor(host, href=rest["source_url"], target="_blank", size="xs"),
-            ],
-            gap=4,
-        )
+            ]
+        return dmc.Group(parts, gap=4)
     if match.get("source") == "off":
         return dmc.Group(
             [
@@ -365,6 +443,8 @@ def _item_card(row: dict, first: datetime, mode: str, edit: dict) -> dmc.Paper:
     line = _source_line(row)
     if line is not None:
         children.append(line)
+    if row.get("basis"):
+        children.append(dmc.Text(row["basis"], size="xs", c="dimmed"))
     if editable:
         children.append(_nutrient_inputs(row, edit.get("nuts") or {}))
         children.append(
@@ -407,6 +487,18 @@ def _item_card(row: dict, first: datetime, mode: str, edit: dict) -> dmc.Paper:
                     _checks(row, mode, edit, include),
                 ],
                 justify="space-between",
+            )
+        )
+        children.append(
+            dmc.Group(
+                dmc.Button(
+                    "Use my own numbers",
+                    id={"type": "ai-override", "index": key},
+                    variant="subtle",
+                    color="gray",
+                    size="compact-xs",
+                ),
+                justify="flex-end",
             )
         )
     return dmc.Paper(dmc.Stack(children, gap=4), p="xs", withBorder=True)
@@ -478,6 +570,37 @@ def append_rows(
     kept = [r for r in old if not replace_origin or r.get("origin") != replace_origin]
     start = max((r["key"] for r in old), default=-1) + 1
     return {**data, "items": kept + [{**r, "key": start + i} for i, r in enumerate(rows)]}
+
+
+def apply_reply(data: dict | None, result: dict) -> dict:
+    """Claude's answer to a reply: replaced rows change in place, untouched rows stay as they are.
+
+    New rows get new keys, so what the user entered for a replaced row doesn't carry over
+    to different numbers, while edits to every other row are kept.
+    """
+    data = data or {"items": []}
+    old = data.get("items") or []
+    start = max((r["key"] for r in old), default=-1) + 1
+    new = [{**r, "key": start + i} for i, r in enumerate(result.get("items") or [])]
+    remove = set(result.get("remove_keys") or [])
+    replaces = {r["replaces_key"]: r for r in new if r.get("replaces_key") is not None}
+    items, placed = [], set()
+    for row in old:
+        if row["key"] in replaces:
+            replacement = replaces[row["key"]]
+            items.append(replacement)
+            placed.add(replacement["key"])
+        elif row["key"] not in remove:
+            items.append(row)
+    items += [r for r in new if r["key"] not in placed]
+    return {
+        **data,
+        "items": items,
+        "message": result.get("message"),
+        "question": result.get("question"),
+        "thread": result.get("thread"),
+        "chat": result.get("chat"),
+    }
 
 
 def _note(text: str, color: str = "gray", title: str | None = None) -> dmc.Alert:
@@ -552,6 +675,76 @@ def start_parse(_clicks, text, photo, data, day_value):
 
 
 @callback(
+    Output("ai-job", "data", allow_duplicate=True),
+    Output("ai-poll", "disabled", allow_duplicate=True),
+    Output("ai-status", "display", allow_duplicate=True),
+    Output("ai-activity", "children", allow_duplicate=True),
+    Output("ai-error", "children", allow_duplicate=True),
+    Input("ai-reply-send", "n_clicks"),
+    Input({"type": "ai-option", "index": ALL}, "n_clicks"),
+    State("ai-reply", "value"),
+    State("ai-items", "data"),
+    State("ai-edits", "data"),
+    State("ai-photo", "data"),
+    State("ai-day", "data"),
+    State("ai-job", "data"),
+    prevent_initial_call=True,
+)
+def start_reply(_send, _options, text, data, edits, photo, day_value, job_ref):
+    """Send the user's reply, typed or a tapped answer, with the list as it stands now."""
+    data = data or {}
+    if ctx.triggered_id == "ai-reply-send":
+        if not ctx.triggered[0].get("value"):
+            raise PreventUpdate
+    else:
+        clicked = triggered_click()
+        options = (data.get("question") or {}).get("options") or []
+        if clicked is None or clicked["index"] >= len(options):
+            raise PreventUpdate
+        text = options[clicked["index"]]
+    text = (text or "").strip()
+    current = get_jobs().get((job_ref or {}).get("id"))
+    if not text or not data.get("thread") or (current is not None and current.running):
+        raise PreventUpdate
+    zone, at, day = tz(), now(), _day(day_value)
+    image = (photo or {}).get("image")
+    job = get_jobs().start(
+        "parse",
+        lambda j: reply_to_review(
+            data["thread"],
+            data.get("chat") or [],
+            text,
+            data.get("items") or [],
+            edits or {},
+            zone,
+            at,
+            j,
+            image,
+            day,
+        ),
+    )
+    return {"id": job.id, "kind": "reply"}, False, "flex", "Reading your reply…", None
+
+
+@callback(
+    Output("ai-items", "data", allow_duplicate=True),
+    Input({"type": "ai-override", "index": ALL}, "n_clicks"),
+    State("ai-items", "data"),
+    State("ai-edits", "data"),
+    prevent_initial_call=True,
+)
+def use_own_numbers(_clicks, data, edits):
+    """Open a row's numbers for typing, remembering the published ones they replace."""
+    clicked = triggered_click()
+    if clicked is None or not data:
+        raise PreventUpdate
+    key = clicked["index"]
+    grams = (edits or {}).get(str(key), {}).get("grams")
+    items = [override_row(r, grams) if r["key"] == key else r for r in data.get("items") or []]
+    return {**data, "items": items}
+
+
+@callback(
     Output("ai-items", "data", allow_duplicate=True),
     Output("ai-error", "children", allow_duplicate=True),
     Output("ai-scan-target", "data", allow_duplicate=True),
@@ -589,6 +782,7 @@ def start_label(photo):
     Output("ai-status", "display", allow_duplicate=True),
     Output("ai-items", "data", allow_duplicate=True),
     Output("ai-error", "children", allow_duplicate=True),
+    Output("ai-reply", "value"),
     Input("ai-poll", "n_intervals"),
     State("ai-job", "data"),
     State("ai-items", "data"),
@@ -599,19 +793,24 @@ def start_label(photo):
 def poll_job(_n, job_ref, data, target, day_value):
     job = get_jobs().get((job_ref or {}).get("id"))
     if job is None:
-        return "", True, "none", no_update, no_update
+        return "", True, "none", no_update, no_update, no_update
     if job.running:
-        return f"{job.activity} ({job.elapsed:.0f}s)", False, "flex", no_update, no_update
-    is_label = job_ref.get("kind") == "label"
-    if job.status == "error":
-        title = "Couldn't read the label" if is_label else "Couldn't itemize"
         return (
-            "",
-            True,
-            "none",
+            f"{job.activity} ({job.elapsed:.0f}s)",
+            False,
+            "flex",
             no_update,
-            dmc.Alert(job.error, color="red", variant="light", title=title),
+            no_update,
+            no_update,
         )
+    kind = job_ref.get("kind")
+    is_label = kind == "label"
+    if job.status == "error":
+        titles = {"label": "Couldn't read the label", "reply": "Couldn't answer that"}
+        alert = dmc.Alert(
+            job.error, color="red", variant="light", title=titles.get(kind, "Couldn't itemize")
+        )
+        return "", True, "none", no_update, alert, no_update  # a typed reply stays in its box
     result = job.result or {}
     if is_label:
         if not result.get("readable") or (result.get("per_serving") or {}).get("kcal") is None:
@@ -622,15 +821,23 @@ def poll_job(_n, job_ref, data, target, day_value):
                 variant="light",
                 title="Couldn't read the label",
             )
-            return "", True, "none", no_update, alert
+            return "", True, "none", no_update, alert, no_update
         target = target or {}
         row = label_row(result, target.get("gtin"), target.get("hint"), _default_at(day_value))
-        return "", True, "none", append_rows(data, [row]), None
+        return "", True, "none", append_rows(data, [row]), None, no_update
+    if kind == "reply":
+        return "", True, "none", apply_reply(data, result), None, ""
     merged = append_rows(data, result.get("items") or [], replace_origin="parse")
-    merged["message"] = result.get("message")
-    if not result.get("items"):
-        merged["message"] = merged["message"] or "Claude didn't find any foods in that."
-    return "", True, "none", merged, None
+    merged.update(
+        message=result.get("message"),
+        question=result.get("question"),
+        thread=result.get("thread"),
+        chat=result.get("chat"),
+    )
+    if not result.get("items") and not merged["question"] and not merged["message"]:
+        merged["message"] = "Claude didn't find any foods in that."
+        merged["chat"] = [*(merged["chat"] or []), {"role": "assistant", "text": merged["message"]}]
+    return "", True, "none", merged, None, ""
 
 
 # --------------------------------------------------------------------------- review
@@ -661,7 +868,7 @@ def today_so_far() -> dict:
 )
 def render_review(data, edits, mode, shown_first):
     children = []
-    if data and data.get("message"):
+    if data and data.get("message") and not data.get("thread"):  # else it's in the conversation
         children.append(
             dmc.Alert(
                 data["message"], color="blue", variant="light", icon=icon("tabler:info-circle")
@@ -678,6 +885,34 @@ def render_review(data, edits, mode, shown_first):
     when = "none" if mode == "library" else "block"
     today = today_so_far() if mode == "ask" else no_update
     return children, "flex", when, *picker, first.isoformat(), today
+
+
+@callback(
+    Output("ai-thread", "children"),
+    Output("ai-options", "children"),
+    Output("ai-discuss", "display"),
+    Input("ai-items", "data"),
+)
+def render_discussion(data):
+    """What Claude and the user have said about this list, and the way to answer."""
+    data = data or {}
+    if not data.get("thread"):
+        return [], [], "none"
+    bubbles = [chat_bubble(m["role"], m["text"]) for m in data.get("chat") or []]
+    options = (data.get("question") or {}).get("options") or []
+    buttons = [
+        dmc.Button(
+            option,
+            id={"type": "ai-option", "index": i},
+            variant="light",
+            size="compact-sm",
+            h="auto",
+            py=4,
+            styles={"label": {"whiteSpace": "normal", "textAlign": "left"}},
+        )
+        for i, option in enumerate(options)
+    ]
+    return bubbles, buttons, "flex"
 
 
 REVIEW_VALUES = [

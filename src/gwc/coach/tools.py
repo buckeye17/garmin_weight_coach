@@ -2,7 +2,9 @@
 
 Weights come back in the user's display unit (with the unit named), energy in
 kcal, nutrients in g / mg. Dates are food days (a food day ends when the user
-falls asleep, not at midnight). Nothing here writes to the database.
+falls asleep, not at midnight). Only the food-lookup tools below save anything: a chain's
+nutrition page, once a lookup finds one. Changes to the food log go through the user
+(coach/proposals.py).
 """
 
 from datetime import date, datetime, timedelta
@@ -21,7 +23,7 @@ from gwc.config import get_settings
 from gwc.db.models import Activity, BodyComp, ManualActivity, Sleep
 from gwc.db.session import session_scope
 from gwc.db.types import utcnow
-from gwc.nutrition import foods, log
+from gwc.nutrition import chains, foods, log
 from gwc.nutrition.nutrients import NUTRIENT_KEYS
 from gwc.nutrition.service import get_usda
 from gwc.nutrition.usda import UsdaError, UsdaHit
@@ -199,6 +201,9 @@ def get_food_entries(args: dict[str, Any]) -> dict[str, Any]:
             "marked_incomplete": log.is_incomplete(s, day),
             "entries": [
                 {
+                    "entry_id": e.id,
+                    "library_food_id": e.food_id,
+                    "note": e.note,
                     "time": e.eaten_at.astimezone(tz).strftime("%Y-%m-%d %H:%M"),
                     "food": e.description,
                     "amount": e.unit_label or f"{e.grams:.0f} g",
@@ -351,6 +356,30 @@ def get_projection(_args: dict[str, Any]) -> dict[str, Any]:
 # --------------------------------------------------------------------------- food lookup
 
 
+def find_chain_source(args: dict[str, Any]) -> dict[str, Any]:
+    with session_scope() as s:
+        known = chains.find(s, args.get("chain") or "")
+        if known is None:
+            return {"known": False}
+        return {"known": True, "url": known.url, "readable_by_web_tools": known.readable}
+
+
+def chain_source_tool() -> ToolSpec:
+    return ToolSpec(
+        "find_chain_source",
+        "Where this chain publishes its nutrition, if an earlier lookup found it. "
+        "readable_by_web_tools false means the page is official but can't be read here, so "
+        "don't try it again: use a third-party copy of its numbers and point the user to it.",
+        {
+            "type": "object",
+            "properties": {"chain": {"type": "string", "description": "e.g. 'Potbelly'"}},
+            "required": ["chain"],
+        },
+        find_chain_source,
+        lambda a: f"Checking where {a.get('chain', 'the chain')} publishes nutrition…",
+    )
+
+
 class FoodLookup:
     """search_my_foods / search_usda for food parsing; remembers USDA hits it returned."""
 
@@ -368,6 +397,7 @@ class FoodLookup:
                         "brand": f.brand,
                         "kind": f.source.value,
                         "source_url": f.source_url,
+                        "source_note": f.source_note,
                         "favorite": f.is_favorite,
                         "per_100g": {k: _r(getattr(f, k)) for k in NUTRIENT_KEYS},
                         "servings": [{"label": sv.label, "grams": sv.grams} for sv in f.servings],
@@ -430,6 +460,7 @@ class FoodLookup:
                 self.search_usda,
                 lambda a: f"Searching USDA for “{a.get('query', '')}”…",
             ),
+            chain_source_tool(),
         ]
 
 
