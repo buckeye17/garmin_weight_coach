@@ -20,6 +20,7 @@ NAV_ITEMS: list[NavItem] = [
     NavItem("Projection", "/projection", "tabler:chart-line", bar_min_width=480),
     NavItem("Coach", "/coach", "tabler:message-chatbot", bar_min_width=560),
     NavItem("Trends", "/trends", "tabler:chart-dots", bar_min_width=640),
+    NavItem("Gout", "/gout", "tabler:flame"),
     NavItem("Settings", "/settings", "tabler:settings"),
 ]
 

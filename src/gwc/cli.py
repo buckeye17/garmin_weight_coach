@@ -49,11 +49,13 @@ def cmd_serve(args: argparse.Namespace) -> None:
 def _start_scheduler() -> None:
     from gwc.coach import summary
     from gwc.garmin.service import get_runner, get_sync_service
+    from gwc.gout import estimate
     from gwc.scheduler import SyncScheduler
 
     scheduler = SyncScheduler(get_sync_service(), get_runner())
     scheduler.start()
     summary.register(scheduler.scheduler, scheduler.service.tz)
+    estimate.register(scheduler.scheduler)
 
 
 def _warn_if_garmin_disconnected(host: str, port: int) -> None:

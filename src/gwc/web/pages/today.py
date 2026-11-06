@@ -12,7 +12,7 @@ from datetime import date, timedelta
 
 import dash
 import dash_mantine_components as dmc
-from dash import ALL, Input, Output, State, callback, ctx, dcc, no_update
+from dash import ALL, Input, Output, State, callback, ctx, dcc, html, no_update
 from dash.exceptions import PreventUpdate
 
 from gwc.analysis import exercise
@@ -22,6 +22,7 @@ from gwc.analysis.targets import NO_GOAL, TargetPlan, day_targets
 from gwc.analysis.units import weight_unit
 from gwc.db.models import FoodLog, ManualActivity
 from gwc.db.session import session_scope
+from gwc.gout import flares, triggers
 from gwc.nutrition import foods, log
 from gwc.web.components.analysis_text import flag_messages, plan_summary
 from gwc.web.components.common import (
@@ -37,6 +38,7 @@ from gwc.web.components.common import (
     unit_select_data,
     when_inputs,
 )
+from gwc.web.components.gout_panels import today_card
 from gwc.web.components.nutrient_bars import nutrient_bars
 from gwc.web.format import fmt_day
 
@@ -371,6 +373,7 @@ def layout(day: str | None = None, **_kwargs):
                                 ),
                                 withBorder=True,
                             ),
+                            html.Div(id="day-gout"),
                         ],
                         gap="md",
                     ),
@@ -566,6 +569,7 @@ def change_day(_prev, _next, _today, picked, selected):
     Output("day-today", "display"),
     Output("day-add", "href"),
     Output("day-add-btn", "children"),
+    Output("day-gout", "children"),
     Input("day-selected", "data"),
     Input("edit-done", "data"),
 )
@@ -591,6 +595,14 @@ def render_day(selected, _edited):
                 c="dimmed",
             )
         ]
+        # Trigger load as of now, or as of the end of a past day.
+        gout_at = min(now(), end)
+        gout = today_card(
+            triggers.report(s, zone, gout_at),
+            flares.active_flare(s),
+            now().astimezone(zone).date(),
+            day == today,
+        )
 
     if day == today:
         title = f"Today · {fmt_day(day)}"
@@ -634,7 +646,39 @@ def render_day(selected, _edited):
         "none" if day == today else "block",
         "/log" if day == today else f"/log?day={day.isoformat()}",
         "Log food" if day == today else "Add to this day",
+        gout,
     )
+
+
+@callback(
+    Output("edit-done", "data", allow_duplicate=True),
+    Input({"type": "today-gout-sev", "index": ALL}, "value"),
+    State("edit-done", "data"),
+    prevent_initial_call=True,
+)
+def rate_flare_today(values, done):
+    """Record today's severity of the current flare from the Today card."""
+    trig = ctx.triggered_id
+    if not isinstance(trig, dict) or not values or values[0] is None:
+        raise PreventUpdate
+    severity = int(values[0])
+    with session_scope() as s:
+        flare = flares.load_flare(s, trig["index"])
+        if flare is None:
+            raise PreventUpdate
+        today = now().astimezone(tz()).date()
+        current = next((d for d in flare.days if d.day == today), None)
+        if (current.severity if current else 0) == severity:
+            raise PreventUpdate
+        flares.set_day(
+            s,
+            flare.id,
+            today,
+            severity,
+            current.medications if current else None,
+            current.note if current else None,
+        )
+    return (done or 0) + 1
 
 
 @callback(

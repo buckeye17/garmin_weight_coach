@@ -362,6 +362,70 @@ class DailyTarget(TimestampMixin, Base):
     details: Mapped[dict[str, Any] | None]
 
 
+# --------------------------------------------------------------------------- Gout
+
+
+class GoutProfile(TimestampMixin, Base):
+    """Gout-relevant values per 100 g of a library food, or of one logged entry.
+
+    A food's profile covers every entry logged from it; an entry's own profile is for
+    one-off entries (described meals) and takes precedence. Recipes without their own
+    profile are worked out from their ingredients'.
+    """
+
+    __tablename__ = "gout_profile"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    food_id: Mapped[int | None] = mapped_column(
+        ForeignKey("food.id", ondelete="CASCADE"), unique=True
+    )
+    food_log_id: Mapped[int | None] = mapped_column(
+        ForeignKey("food_log.id", ondelete="CASCADE"), unique=True
+    )
+    purine_mg: Mapped[float] = mapped_column(Float)  # total purines
+    animal_purine_mg: Mapped[float] = mapped_column(Float)  # the part from meat and seafood
+    alcohol_g: Mapped[float] = mapped_column(Float)  # ethanol
+    # A sugar-sweetened drink or fruit juice: its sugar counts toward the sweet-drink factor.
+    sweet_drink: Mapped[bool] = mapped_column(Boolean, default=False)
+    source: Mapped[str] = mapped_column(String(16))  # ai | manual
+    note: Mapped[str | None] = mapped_column(Text)
+
+
+class GoutFlare(TimestampMixin, Base):
+    """A gout attack, from when it started until the user marks it over."""
+
+    __tablename__ = "gout_flare"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(index=True)
+    tz: Mapped[str] = mapped_column(String(64))
+    joints: Mapped[Any]  # list of joint names
+    ended_on: Mapped[date | None] = mapped_column(Date)  # last day with symptoms
+    note: Mapped[str | None] = mapped_column(Text)
+
+    days: Mapped[list["GoutDay"]] = relationship(
+        back_populates="flare", cascade="all, delete-orphan", order_by="GoutDay.day"
+    )
+
+
+class GoutDay(TimestampMixin, Base):
+    """How bad one day of a flare was (1–5), and what was taken for it."""
+
+    __tablename__ = "gout_day"
+    __table_args__ = (UniqueConstraint("flare_id", "day"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    flare_id: Mapped[int] = mapped_column(
+        ForeignKey("gout_flare.id", ondelete="CASCADE"), index=True
+    )
+    day: Mapped[date] = mapped_column(Date)  # local calendar date
+    severity: Mapped[int] = mapped_column(Integer)
+    medications: Mapped[Any]  # list of names, e.g. ["Colchicine", "Ibuprofen"]
+    note: Mapped[str | None] = mapped_column(Text)
+
+    flare: Mapped[GoutFlare] = relationship(back_populates="days")
+
+
 # --------------------------------------------------------------------------- App state
 
 
