@@ -434,6 +434,9 @@ def test_gout_page_and_today_card_render(app, db):
         flares.end_flare(s, past.id, flares.start_day(past) + timedelta(days=2))
         eid, fid = e.id, flare.id
 
+    # Both rating dialogs spell out what each point feels like.
+    assert str(gout.layout()).count("bedsheet") == 2
+
     panel, active, history = gout.render(0)
     assert any("Estimate now" in str(c) for c in panel)
     assert "Current flare" in str(active) and "It's over" in str(active)

@@ -37,6 +37,34 @@ def severity_legend() -> dmc.Text:
     return dmc.Text(text, size="xs", c="dimmed")
 
 
+def severity_guide() -> dmc.Stack:
+    """What each point of the scale feels like, for the rating dialogs."""
+    rows = [
+        dmc.Group(
+            [
+                dmc.Badge(
+                    str(n),
+                    color=flares.SEVERITY_COLORS[n],
+                    variant="light",
+                    circle=True,
+                    size="lg",
+                ),
+                dmc.Text(
+                    [dmc.Text(label, span=True, fw=600), f" · {feels}"],
+                    size="xs",
+                    flex=1,
+                    miw=0,
+                ),
+            ],
+            gap="xs",
+            wrap="nowrap",
+            align="flex-start",
+        )
+        for n, (label, feels) in flares.SEVERITY.items()
+    ]
+    return dmc.Stack(rows, gap=6)
+
+
 def factor_row(f: Factor) -> dmc.Group:
     color = "gray" if f.level is None else LEVEL_COLORS[f.level]
     return dmc.Group(

@@ -39,7 +39,7 @@ from gwc.web.components.gout_panels import (
     lookback_panel,
     severity_badge,
     severity_data,
-    severity_legend,
+    severity_guide,
     sources_list,
 )
 from gwc.web.format import fmt_day
@@ -67,7 +67,7 @@ def _flare_modal() -> dmc.Modal:
                     [
                         dmc.Text("How bad is it?", size="sm", fw=500),
                         dmc.SegmentedControl(id="flare-sev", data=severity_data(), fullWidth=True),
-                        severity_legend(),
+                        severity_guide(),
                         dmc.TagsInput(
                             id="flare-meds",
                             label="Taken for it",
@@ -104,7 +104,7 @@ def _day_modal() -> dmc.Modal:
                 dmc.SegmentedControl(
                     id="gday-sev", data=severity_data(with_none=True), fullWidth=True
                 ),
-                severity_legend(),
+                severity_guide(),
                 dmc.TagsInput(
                     id="gday-meds",
                     label="Taken for it",

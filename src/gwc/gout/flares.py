@@ -12,12 +12,16 @@ from sqlalchemy.orm import Session, selectinload
 
 from gwc.db.models import GoutDay, GoutFlare
 
+# Label and what it feels like, so ratings stay comparable from one flare to the next.
 SEVERITY: dict[int, tuple[str, str]] = {
-    1: ("Twinge", "Noticeable, but no real pain"),
-    2: ("Mild", "Sore, walking is fine"),
-    3: ("Moderate", "Limping, hard to ignore"),
-    4: ("Severe", "Hard to bear weight"),
-    5: ("Worst", "Can't stand anything touching it"),
+    1: ("Twinge", "You notice the joint: a slight ache or warmth, no swelling. Using it is fine."),
+    2: ("Mild", "Sore and a little swollen or warm, but you can walk on it and use it normally."),
+    3: (
+        "Moderate",
+        "Red, swollen and clearly painful. You limp or avoid using it; shoes may not fit.",
+    ),
+    4: ("Severe", "Very painful. Hard to put weight on or use, and it may wake you at night."),
+    5: ("Worst", "Can't use it at all. Even a bedsheet touching it hurts."),
 }
 SEVERITY_COLORS = {1: "yellow", 2: "orange", 3: "orange", 4: "red", 5: "red"}
 JOINTS = [
