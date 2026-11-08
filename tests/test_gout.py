@@ -12,6 +12,8 @@ from gwc.db.models import (
     Food,
     FoodLog,
     FoodSource,
+    GoutDay,
+    GoutFlare,
     GoutProfile,
     LogSource,
     RecipeItem,
@@ -294,11 +296,22 @@ def test_flare_lifecycle(db):
         flare = flares.load_flare(s, fid)
         assert flares.peak(flare) == 5
         assert len(flares.flare_dates(flare, date(2026, 11, 5))) == 4
-        flares.set_day(s, fid, date(2026, 11, 4), 0, [], None)  # symptom-free after all
+        with pytest.raises(ValueError, match="how bad"):
+            flares.set_day(s, fid, date(2026, 11, 4), 0, [], None)  # no "none": it's over
+        # Unrated days count the same as the last rated day before them.
+        assert flares.severity_on(flare, date(2026, 11, 4)) == (2, False)
+        assert flares.severity_on(flare, date(2026, 11, 6)) == (2, True)
+        assert flares.severity_on(flare, date(2026, 11, 1)) is None
+        # Marked over today: today if it was rated, otherwise yesterday.
+        assert flares.default_end(flare, date(2026, 11, 4)) == date(2026, 11, 4)
+        assert flares.default_end(flare, date(2026, 11, 7)) == date(2026, 11, 6)
+        assert flares.default_end(flare, date(2026, 11, 2)) == date(2026, 11, 2)
         flares.end_flare(s, fid, date(2026, 11, 3))
     with session_scope() as s:
         flare = flares.load_flare(s, fid)
         assert flare.ended_on == date(2026, 11, 3) and len(flare.days) == 2
+        with pytest.raises(ValueError, match="after the flare ended"):
+            flares.set_day(s, fid, date(2026, 11, 4), 2, [], None)
         assert flares.active_flare(s) is None
         assert len(flares.flare_dates(flare, date(2026, 11, 20))) == 2
         # Moving the start later drops the days before it.
@@ -452,4 +465,61 @@ def test_gout_page_and_today_card_render(app, db):
 
     card = today.render_day(None, 0)[-1]
     text = str(card)
-    assert "Gout triggers" in text and "how bad is it today" in text
+    assert "Gout triggers" in text and "how bad is it today" in text and "It's over" in text
+    assert "'label': 'None'" not in text
+
+    # Today's card rates whichever flare day is being viewed; unrated days say what
+    # they're counted as.
+    from gwc.web.components.gout_panels import today_card
+
+    with session_scope() as s:
+        flare = flares.load_flare(s, fid)
+        first = flares.start_day(flare)
+        later = first + timedelta(days=4)  # days 3 and on aren't rated
+        text = str(today_card(None, flare, later, first + timedelta(days=2)))
+        assert "how bad was it" in text and "like the day before" in text
+        assert "It's over" not in text  # only offered on today
+        assert "flare day" not in str(today_card(None, flare, later, first - timedelta(days=1)))
+    active = str(gout.render(0)[1])
+    assert "gout-day-sev" in active
+
+
+def test_flare_controls_match_their_callbacks(app):
+    """A pattern id only reaches its callback when the keys match exactly."""
+    import json
+
+    from dash._callback import GLOBAL_CALLBACK_LIST
+
+    from gwc.web.components.gout_panels import today_card
+    from gwc.web.pages import gout
+
+    def ids(component) -> list[dict]:
+        found, stack = [], [component]
+        while stack:
+            c = stack.pop()
+            if isinstance(c, (list, tuple)):
+                stack.extend(c)
+            elif hasattr(c, "to_plotly_json"):
+                if isinstance(getattr(c, "id", None), dict):
+                    found.append(c.id)
+                stack.append(getattr(c, "children", None))
+        return found
+
+    patterns = {}
+    for cb in GLOBAL_CALLBACK_LIST:
+        for i in cb["inputs"]:
+            if i["id"].startswith("{"):
+                pid = json.loads(i["id"])
+                patterns[pid["type"]] = set(pid)
+
+    flare = GoutFlare(id=1, started_at=datetime(2026, 11, 2, 21, tzinfo=NY), tz=str(NY), joints=[])
+    flare.days = [GoutDay(day=date(2026, 11, 2), severity=3, medications=[])]
+    rendered = ids(today_card(None, flare, date(2026, 11, 3), date(2026, 11, 3)))
+    rendered += ids(gout._rate_row(flare, date(2026, 11, 3)))
+    rendered += ids(gout._day_row(flare, date(2026, 11, 3)))
+    seen = set()
+    for cid in rendered:
+        if cid["type"] in patterns:
+            assert set(cid) == patterns[cid["type"]], cid
+            seen.add(cid["type"])
+    assert {"today-gout-sev", "today-gout-end", "gout-day-sev", "gout-day"} <= seen

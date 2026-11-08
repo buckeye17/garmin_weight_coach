@@ -8,6 +8,7 @@ from gwc.db.models import GoutDay, GoutFlare
 from gwc.gout import flares
 from gwc.gout.triggers import LEVEL_COLORS, LEVEL_LABELS, Factor, Level, Lookback, Report
 from gwc.web.components.common import fmt_clock, icon
+from gwc.web.format import fmt_day
 
 FOOD_KEYS = ("purines", "alcohol", "sweet")
 
@@ -18,18 +19,30 @@ def level_badge(level: Level | None, prefix: str = "") -> dmc.Badge:
     return dmc.Badge(f"{prefix}{LEVEL_LABELS[level]}", color=LEVEL_COLORS[level], variant="light")
 
 
-def severity_badge(severity: int | None) -> dmc.Badge:
+def severity_badge(severity: int | None, assumed: bool = False) -> dmc.Badge:
+    """A day's rating; an assumed one (carried from the day before) is outlined."""
     if not severity:
-        return dmc.Badge("Not recorded", color="gray", variant="outline", tt="none")
+        return dmc.Badge("Not rated", color="gray", variant="outline", tt="none")
     label = flares.SEVERITY[severity][0]
     return dmc.Badge(
-        f"{severity} · {label}", color=flares.SEVERITY_COLORS[severity], variant="light", tt="none"
+        f"{severity} · {label}",
+        color=flares.SEVERITY_COLORS[severity],
+        variant="outline" if assumed else "light",
+        tt="none",
     )
 
 
-def severity_data(with_none: bool = False) -> list[dict[str, str]]:
-    data = [{"value": "0", "label": "None"}] if with_none else []
-    return data + [{"value": str(n), "label": str(n)} for n in flares.SEVERITY]
+def severity_data() -> list[dict[str, str]]:
+    return [{"value": str(n), "label": str(n)} for n in flares.SEVERITY]
+
+
+def assumed_note(flare: GoutFlare, day: date) -> str | None:
+    """Says what an unrated day is counted as, or None if it was rated."""
+    sev = flares.severity_on(flare, day)
+    if sev is None or not sev[1]:
+        return None
+    n = sev[0]
+    return f"Not rated, so counted as {n} ({flares.SEVERITY[n][0].lower()}) like the day before."
 
 
 def severity_legend() -> dmc.Text:
@@ -235,9 +248,10 @@ def day_entry(flare: GoutFlare, day: date) -> GoutDay | None:
 
 
 def today_card(
-    report: Report | None, active: GoutFlare | None, today: date, viewing_today: bool
+    report: Report | None, active: GoutFlare | None, today: date, day: date | None
 ) -> dmc.Card:
-    """Today's compact version: overall load, what's notable, and today's flare severity."""
+    """Today's compact version: overall load, what's notable, and the flare's severity on
+    the day being viewed (`day`, a calendar date; None when it's outside the flare)."""
     children: list = []
     head = [dmc.Title("Gout triggers", order=5)]
     if report is not None:
@@ -261,29 +275,43 @@ def today_card(
                     c="dimmed",
                 )
             )
-    if active is not None and viewing_today:
-        current = day_entry(active, today)
-        n = flares.day_number(active, today)
-        children.append(
-            dmc.Paper(
-                dmc.Stack(
-                    [
-                        dmc.Text(f"Flare day {n}: how bad is it today?", size="sm", fw=500),
-                        dmc.SegmentedControl(
-                            id={"type": "today-gout-sev", "index": active.id},
-                            data=severity_data(with_none=True),
-                            value=str(current.severity) if current else None,
-                            fullWidth=True,
-                            size="xs",
-                        ),
-                        severity_legend(),
-                    ],
-                    gap=6,
-                ),
-                p="xs",
-                withBorder=True,
-            )
+    if active is not None and day is not None and flares.start_day(active) <= day <= today:
+        current = day_entry(active, day)
+        n = flares.day_number(active, day)
+        ask = (
+            f"Flare day {n}: how bad is it today?"
+            if day == today
+            else f"Flare day {n} ({fmt_day(day)}): how bad was it?"
         )
+        note = assumed_note(active, day)
+        rows: list = [
+            dmc.Group(
+                [
+                    dmc.Text(ask, size="sm", fw=500),
+                    dmc.Button(
+                        "It's over",
+                        id={"type": "today-gout-end", "index": active.id},
+                        size="compact-xs",
+                        variant="light",
+                    )
+                    if day == today
+                    else None,
+                ],
+                justify="space-between",
+                align="center",
+                wrap="nowrap",
+            ),
+            dmc.SegmentedControl(
+                id={"type": "today-gout-sev", "index": active.id, "day": day.isoformat()},
+                data=severity_data(),
+                value=str(current.severity) if current else None,
+                fullWidth=True,
+                size="xs",
+            ),
+            dmc.Text(note, size="xs", c="dimmed") if note else None,
+            severity_legend(),
+        ]
+        children.append(dmc.Paper(dmc.Stack(rows, gap=6), p="xs", withBorder=True))
     children.append(
         dmc.Anchor(
             dmc.Group([icon("tabler:flame", 14), "Flares and details"], gap=4),

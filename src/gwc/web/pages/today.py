@@ -597,11 +597,13 @@ def render_day(selected, _edited):
         ]
         # Trigger load as of now, or as of the end of a past day.
         gout_at = min(now(), end)
+        # Flare days are calendar dates; "today" on this page is the food day.
+        calendar_today = now().astimezone(zone).date()
         gout = today_card(
             triggers.report(s, zone, gout_at),
             flares.active_flare(s),
-            now().astimezone(zone).date(),
-            day == today,
+            calendar_today,
+            calendar_today if day == today else day,
         )
 
     if day == today:
@@ -652,32 +654,51 @@ def render_day(selected, _edited):
 
 @callback(
     Output("edit-done", "data", allow_duplicate=True),
-    Input({"type": "today-gout-sev", "index": ALL}, "value"),
+    Input({"type": "today-gout-sev", "index": ALL, "day": ALL}, "value"),
     State("edit-done", "data"),
     prevent_initial_call=True,
 )
 def rate_flare_today(values, done):
-    """Record today's severity of the current flare from the Today card."""
+    """Record the viewed day's severity of the current flare from the Today card."""
     trig = ctx.triggered_id
     if not isinstance(trig, dict) or not values or values[0] is None:
         raise PreventUpdate
     severity = int(values[0])
+    day = date.fromisoformat(trig["day"])
     with session_scope() as s:
         flare = flares.load_flare(s, trig["index"])
         if flare is None:
             raise PreventUpdate
-        today = now().astimezone(tz()).date()
-        current = next((d for d in flare.days if d.day == today), None)
-        if (current.severity if current else 0) == severity:
+        current = next((d for d in flare.days if d.day == day), None)
+        if current is not None and current.severity == severity:
             raise PreventUpdate
         flares.set_day(
             s,
             flare.id,
-            today,
+            day,
             severity,
             current.medications if current else None,
             current.note if current else None,
         )
+    return (done or 0) + 1
+
+
+@callback(
+    Output("edit-done", "data", allow_duplicate=True),
+    Input({"type": "today-gout-end", "index": ALL}, "n_clicks"),
+    State("edit-done", "data"),
+    prevent_initial_call=True,
+)
+def end_flare_today(_clicks, done):
+    """Mark the current flare over from the Today card."""
+    clicked = triggered_click()
+    if clicked is None:
+        raise PreventUpdate
+    with session_scope() as s:
+        flare = flares.load_flare(s, clicked["index"])
+        if flare is None or flare.ended_on is not None:
+            raise PreventUpdate
+        flares.end_flare(s, flare.id, flares.default_end(flare, now().astimezone(tz()).date()))
     return (done or 0) + 1
 
 

@@ -1,9 +1,9 @@
 """Gout: trigger load right now, the current flare day by day, and past flares.
 
 Each flare records when it started, where, and how bad each day was (1–5, with
-anything taken for it). Past flares show the 48 hours before them next to the
-same hours on ordinary days. Purine numbers are Claude's estimates; tap a source
-to correct one.
+anything taken for it; an unrated day counts as the day before). Past flares show
+the 48 hours before them next to the same hours on ordinary days. Purine numbers
+are Claude's estimates; tap a source to correct one.
 """
 
 from datetime import date, timedelta
@@ -31,6 +31,7 @@ from gwc.web.components.common import (
     when_inputs,
 )
 from gwc.web.components.gout_panels import (
+    assumed_note,
     day_entry,
     factor_row,
     flare_summary,
@@ -56,6 +57,7 @@ def _flare_modal() -> dmc.Modal:
         dmc.Stack(
             [
                 when_inputs("flare", label="Started"),
+                dmc.Select(id="flare-end", label="Last day with symptoms", allowDeselect=False),
                 dmc.TagsInput(
                     id="flare-joints",
                     label="Where",
@@ -101,9 +103,7 @@ def _day_modal() -> dmc.Modal:
         dmc.Stack(
             [
                 dmc.Text("How bad was it?", size="sm", fw=500),
-                dmc.SegmentedControl(
-                    id="gday-sev", data=severity_data(with_none=True), fullWidth=True
-                ),
+                dmc.SegmentedControl(id="gday-sev", data=severity_data(), fullWidth=True),
                 severity_guide(),
                 dmc.TagsInput(
                     id="gday-meds",
@@ -246,10 +246,18 @@ def _trigger_panel(report: triggers.Report, today: date, waiting: int, job) -> l
     return children
 
 
-def _day_row(flare, day: date):
+def _day_detail(flare, day: date) -> str:
     row = day_entry(flare, day)
-    meds = ", ".join(row.medications) if row and row.medications else None
-    detail = " · ".join(x for x in (meds, row.note if row else None) if x) or "Tap to record"
+    if row is None:
+        return assumed_note(flare, day) or "Not rated"
+    meds = ", ".join(row.medications) if row.medications else None
+    return " · ".join(x for x in (meds, row.note) if x) or "Tap to add medication or a note"
+
+
+def _day_row(flare, day: date):
+    """A day of a past flare: tap it to change it."""
+    sev = flares.severity_on(flare, day)
+    detail = _day_detail(flare, day)
     return dmc.UnstyledButton(
         dmc.Paper(
             dmc.Group(
@@ -267,7 +275,7 @@ def _day_row(flare, day: date):
                         flex=1,
                         miw=0,
                     ),
-                    severity_badge(row.severity if row else None),
+                    severity_badge(*sev) if sev else severity_badge(None),
                 ],
                 wrap="nowrap",
                 gap="sm",
@@ -278,6 +286,54 @@ def _day_row(flare, day: date):
         ),
         id={"type": "gout-day", "flare": flare.id, "day": day.isoformat()},
         w="100%",
+    )
+
+
+def _rate_row(flare, day: date):
+    """A day of the current flare: rate it in place, or open it for medication and notes."""
+    row = day_entry(flare, day)
+    return dmc.Paper(
+        dmc.Stack(
+            [
+                dmc.Group(
+                    [
+                        dmc.Stack(
+                            [
+                                dmc.Text(
+                                    f"{fmt_day(day)} · day {flares.day_number(flare, day)}",
+                                    size="sm",
+                                    fw=500,
+                                ),
+                                dmc.Text(_day_detail(flare, day), size="xs", c="dimmed"),
+                            ],
+                            gap=0,
+                            flex=1,
+                            miw=0,
+                        ),
+                        dmc.ActionIcon(
+                            icon("tabler:pencil", 16),
+                            id={"type": "gout-day", "flare": flare.id, "day": day.isoformat()},
+                            variant="subtle",
+                            color="gray",
+                            **{"aria-label": "Medication and notes"},
+                        ),
+                    ],
+                    wrap="nowrap",
+                    gap="sm",
+                    align="flex-start",
+                ),
+                dmc.SegmentedControl(
+                    id={"type": "gout-day-sev", "flare": flare.id, "day": day.isoformat()},
+                    data=severity_data(),
+                    value=str(row.severity) if row else None,
+                    fullWidth=True,
+                    size="xs",
+                ),
+            ],
+            gap=6,
+        ),
+        p="xs",
+        withBorder=True,
     )
 
 
@@ -321,8 +377,13 @@ def _active_panel(flare, lb, today: date) -> list:
         ),
         dmc.Text(f"{started} · {', '.join(flare.joints) or 'joint not noted'}", size="sm"),
         dmc.Text(flare.note, size="xs", c="dimmed") if flare.note else None,
-        *[_day_row(flare, d) for d in days],
-        dmc.Text("“It's over” ends it on the last day you rated.", size="xs", c="dimmed"),
+        *[_rate_row(flare, d) for d in days],
+        dmc.Text(
+            "“It's over” makes today the last day with symptoms if you rated it, otherwise "
+            "yesterday. You can change that day afterward with Edit.",
+            size="xs",
+            c="dimmed",
+        ),
         dmc.Divider(),
         lookback_panel(lb, today),
     ]
@@ -451,6 +512,9 @@ def poll_estimate(_n, job_id, changed):
     Output("flare-sev", "value"),
     Output("flare-meds", "value"),
     Output("flare-note", "value"),
+    Output("flare-end", "data"),
+    Output("flare-end", "value"),
+    Output("flare-end", "display"),
     Output("flare-first-day", "display"),
     Output("flare-delete", "display"),
     Output("flare-error", "children", allow_duplicate=True),
@@ -463,7 +527,23 @@ def open_flare(new_clicks, _edits):
         if not new_clicks:
             raise PreventUpdate
         day, clock = to_picker(now())
-        return True, None, "Log a flare", day, clock, [], None, [], "", "flex", "none", ""
+        return (
+            True,
+            None,
+            "Log a flare",
+            day,
+            clock,
+            [],
+            None,
+            [],
+            "",
+            [],
+            None,
+            "none",
+            "flex",
+            "none",
+            "",
+        )
     clicked = triggered_click()
     if clicked is None:
         raise PreventUpdate
@@ -472,6 +552,21 @@ def open_flare(new_clicks, _edits):
         if flare is None:
             raise PreventUpdate
         day, clock = to_picker(flare.started_at)
+        end_days, end = [], None
+        if flare.ended_on is not None:
+            today = now().astimezone(tz()).date()
+            first = flares.start_day(flare)
+            end_days = [  # any day from the start through today
+                {
+                    "value": d.isoformat(),
+                    "label": f"{fmt_day(d)} · day {flares.day_number(flare, d)}",
+                }
+                for d in (
+                    first + timedelta(days=i)
+                    for i in range((max(today, flare.ended_on) - first).days + 1)
+                )
+            ]
+            end = flare.ended_on.isoformat()
         return (
             True,
             flare.id,
@@ -482,6 +577,9 @@ def open_flare(new_clicks, _edits):
             None,
             [],
             flare.note or "",
+            end_days,
+            end,
+            "block" if end else "none",
             "none",
             "block",
             "",
@@ -501,10 +599,11 @@ def open_flare(new_clicks, _edits):
     State("flare-sev", "value"),
     State("flare-meds", "value"),
     State("flare-note", "value"),
+    State("flare-end", "value"),
     State("gout-changed", "data"),
     prevent_initial_call=True,
 )
-def save_flare(save, delete, flare_id, day, clock, joints, sev, meds, note, changed):
+def save_flare(save, delete, flare_id, day, clock, joints, sev, meds, note, end, changed):
     if not (save or delete):
         raise PreventUpdate
     with session_scope() as s:
@@ -517,7 +616,7 @@ def save_flare(save, delete, flare_id, day, clock, joints, sev, meds, note, chan
         if started > now() + timedelta(minutes=5):
             return no_update, no_update, "That's in the future"
         try:
-            flares.save_flare(
+            flare = flares.save_flare(
                 s,
                 flare_id,
                 started_at=started,
@@ -529,6 +628,8 @@ def save_flare(save, delete, flare_id, day, clock, joints, sev, meds, note, chan
             )
         except ValueError as e:
             return no_update, no_update, str(e)
+        if flare.ended_on is not None and end:
+            flares.end_flare(s, flare.id, date.fromisoformat(end))
     return False, (changed or 0) + 1, ""
 
 
@@ -548,8 +649,8 @@ def end_or_reopen(_end, _reopen, changed):
         if flare is None:
             raise PreventUpdate
         if clicked["type"] == "gout-end":
-            last = max((d.day for d in flare.days), default=flares.start_day(flare))
-            flares.end_flare(s, flare.id, last)
+            today = now().astimezone(tz()).date()
+            flares.end_flare(s, flare.id, flares.default_end(flare, today))
         else:
             flares.end_flare(s, flare.id, None)
     return (changed or 0) + 1
@@ -576,12 +677,13 @@ def open_day(_clicks):
         if flare is None:
             raise PreventUpdate
         row = day_entry(flare, day)
+        sev = flares.severity_on(flare, day)  # an unrated day starts at the day before's
         title = f"{fmt_day(day)} · flare day {flares.day_number(flare, day)}"
         return (
             True,
             {"flare": flare.id, "day": day.isoformat()},
             title,
-            str(row.severity) if row else "0",
+            str(sev[0]) if sev else None,
             list(row.medications) if row else [],
             row.note or "" if row else "",
             "",
@@ -611,6 +713,40 @@ def save_day(clicks, key, sev, meds, note, changed):
         except ValueError as e:
             return no_update, no_update, str(e)
     return False, (changed or 0) + 1, ""
+
+
+@callback(
+    Output("gout-changed", "data", allow_duplicate=True),
+    Input({"type": "gout-day-sev", "flare": ALL, "day": ALL}, "value"),
+    State("gout-changed", "data"),
+    prevent_initial_call=True,
+)
+def rate_day(_values, changed):
+    """Save a rating picked in a current-flare day row. Re-renders fire this with every
+    row's value, so only ratings that differ from what's saved are written."""
+    picked = [(i["id"], int(i["value"])) for i in ctx.inputs_list[0] if i.get("value")]
+    wrote = False
+    with session_scope() as s:
+        for key, severity in picked:
+            flare = flares.load_flare(s, key["flare"])
+            if flare is None:
+                continue
+            day = date.fromisoformat(key["day"])
+            row = day_entry(flare, day)
+            if row is not None and row.severity == severity:
+                continue
+            flares.set_day(
+                s,
+                flare.id,
+                day,
+                severity,
+                row.medications if row else None,
+                row.note if row else None,
+            )
+            wrote = True
+    if not wrote:
+        raise PreventUpdate
+    return (changed or 0) + 1
 
 
 # --------------------------------------------------------------------------- corrections

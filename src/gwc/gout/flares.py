@@ -1,7 +1,8 @@
 """Gout flares: when one started, where, and how bad each day of it was.
 
-Only days with symptoms are recorded; a day with no entry counts as 0. A flare
-stays open (shown on Today, asking how bad today is) until it's marked over.
+Every day of a flare has symptoms (1–5); a day that wasn't rated is assumed to be
+as bad as the last day that was. A flare stays open (shown on Today, asking how
+bad today is) until it's marked over, which sets its last day with symptoms.
 """
 
 from datetime import date, datetime, timedelta
@@ -125,19 +126,17 @@ def set_day(
     severity: int | None,
     medications: list[str] | None,
     note: str | None,
-) -> GoutDay | None:
-    """Record one day of a flare; no severity clears the day (symptom-free)."""
+) -> GoutDay:
+    """Record how bad one day of a flare was (1–5; a day without symptoms ends the flare)."""
+    severity = _check_severity(severity)
     flare = load_flare(s, flare_id)
     if flare is None:
         raise ValueError("Flare not found")
     if day < start_day(flare):
         raise ValueError("That day is before the flare started")
+    if flare.ended_on is not None and day > flare.ended_on:
+        raise ValueError("That day is after the flare ended")
     row = next((d for d in flare.days if d.day == day), None)
-    if not severity:
-        if row is not None:
-            flare.days.remove(row)
-        return None
-    severity = _check_severity(severity)
     if row is None:
         row = GoutDay(day=day, severity=severity, medications=[])
         flare.days.append(row)
@@ -170,6 +169,26 @@ def flare_dates(flare: GoutFlare, today: date) -> list[date]:
     first = start_day(flare)
     last = flare.ended_on or max(today, first)
     return [first + timedelta(days=i) for i in range((last - first).days + 1)]
+
+
+def severity_on(flare: GoutFlare, day: date) -> tuple[int, bool] | None:
+    """How bad `day` was, and whether that's assumed: an unrated day counts the same
+    as the last rated day before it."""
+    last = None
+    for d in sorted(flare.days, key=lambda d: d.day):
+        if d.day == day:
+            return d.severity, False
+        if d.day > day:
+            break
+        last = d
+    return (last.severity, True) if last is not None else None
+
+
+def default_end(flare: GoutFlare, today: date) -> date:
+    """The last day with symptoms when it's marked over today: today if today was
+    rated, otherwise yesterday (unrated days count as still going)."""
+    rated_today = any(d.day == today for d in flare.days)
+    return max(start_day(flare), today if rated_today else today - timedelta(days=1))
 
 
 def peak(flare: GoutFlare) -> int | None:
