@@ -518,3 +518,15 @@ def test_ai_parse_needs_text_or_photo(app, monkeypatch):
     out = describe.start_parse(1, "", {"image": "data:image/jpeg;base64,/9j/AAAA"}, None, None)
     assert out[0] == {"id": "j", "kind": "parse"} and out[3] == "Looking at your photo…"
     assert started == ["parse"]
+
+
+def test_boot_id_endpoint_and_reload_script(app):
+    """Open pages compare this id to spot a restart and reload themselves."""
+    from gwc.web.app import BOOT_ID, BOOT_PATH
+
+    resp = app.server.test_client().get(BOOT_PATH)
+    assert resp.status_code == 200
+    assert resp.get_json()["boot"] == BOOT_ID
+    assert resp.headers["Cache-Control"] == "no-store"
+    page = app.server.test_client().get("/").get_data(as_text=True)
+    assert "reload.js" in page
