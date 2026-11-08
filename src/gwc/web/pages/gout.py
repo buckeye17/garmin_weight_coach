@@ -67,7 +67,7 @@ def _flare_modal() -> dmc.Modal:
                 ),
                 dmc.Stack(
                     [
-                        dmc.Text("How bad is it?", size="sm", fw=500),
+                        dmc.Text("How bad is it?", id="flare-sev-label", size="sm", fw=500),
                         dmc.SegmentedControl(id="flare-sev", data=severity_data(), fullWidth=True),
                         severity_guide(),
                         dmc.TagsInput(
@@ -182,6 +182,7 @@ def layout(**_kwargs):
             ),
             dcc.Store(id="gout-changed", data=0),
             dcc.Store(id="gout-flare-id"),
+            dcc.Store(id="gout-flare-start"),  # the edited flare's first day, as it was
             dcc.Store(id="gout-day-key"),
             dcc.Store(id="gout-entry-id"),
             dcc.Store(id="gout-job"),
@@ -515,7 +516,7 @@ def poll_estimate(_n, job_id, changed):
     Output("flare-end", "data"),
     Output("flare-end", "value"),
     Output("flare-end", "display"),
-    Output("flare-first-day", "display"),
+    Output("gout-flare-start", "data"),
     Output("flare-delete", "display"),
     Output("flare-error", "children", allow_duplicate=True),
     Input("gout-new", "n_clicks"),
@@ -540,7 +541,7 @@ def open_flare(new_clicks, _edits):
             [],
             None,
             "none",
-            "flex",
+            None,
             "none",
             "",
         )
@@ -552,6 +553,7 @@ def open_flare(new_clicks, _edits):
         if flare is None:
             raise PreventUpdate
         day, clock = to_picker(flare.started_at)
+        first_rating = flares.severity_on(flare, flares.start_day(flare))
         end_days, end = [], None
         if flare.ended_on is not None:
             today = now().astimezone(tz()).date()
@@ -574,16 +576,39 @@ def open_flare(new_clicks, _edits):
             day,
             clock,
             list(flare.joints),
-            None,
+            str(first_rating[0]) if first_rating else None,  # for a start moved earlier
             [],
             flare.note or "",
             end_days,
             end,
             "block" if end else "none",
-            "none",
+            flares.start_day(flare).isoformat(),
             "block",
             "",
         )
+
+
+@callback(
+    Output("flare-first-day", "display"),
+    Output("flare-sev-label", "children"),
+    Input("flare-date", "value"),
+    Input("gout-flare-start", "data"),
+)
+def show_first_day(picked, was_start):
+    """A new flare asks how bad it is; an edited one only when its start moves earlier,
+    since that adds days that need a rating."""
+    if not was_start:
+        return "flex", "How bad is it?"
+    try:
+        day = date.fromisoformat(str(picked)[:10])
+    except ValueError:
+        return "none", no_update
+    start = date.fromisoformat(was_start)
+    if day >= start:
+        return "none", no_update
+    return "flex", (
+        f"How bad was it on {fmt_day(day)}? Days until {fmt_day(start)} count the same."
+    )
 
 
 @callback(

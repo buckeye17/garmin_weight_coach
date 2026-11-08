@@ -484,6 +484,40 @@ def test_gout_page_and_today_card_render(app, db):
     assert "gout-day-sev" in active
 
 
+def test_moving_a_flare_start(db):
+    start = datetime(2026, 11, 6, 0, 2, tzinfo=NY)
+    kw = {"tz": "America/New_York", "joints": ["Ankle"], "note": ""}
+    with session_scope() as s:
+        fid = flares.save_flare(s, None, started_at=start, severity=3, **kw).id
+        flares.set_day(s, fid, date(2026, 11, 8), 2, [], None)
+    with session_scope() as s:
+        # Two days earlier: the new first day takes day 1's rating unless one is given,
+        # and the day in between counts the same.
+        flares.save_flare(s, fid, started_at=start - timedelta(days=2), **kw)
+        flare = flares.load_flare(s, fid)
+        assert sorted((d.day.day, d.severity) for d in flare.days) == [(4, 3), (6, 3), (8, 2)]
+        assert flares.severity_on(flare, date(2026, 11, 5)) == (3, True)
+        assert flare.joints == ["Ankle"]
+        flares.save_flare(s, fid, started_at=start - timedelta(days=3), severity=1, **kw)
+        first = min(flares.load_flare(s, fid).days, key=lambda d: d.day)
+        assert (first.day, first.severity) == (date(2026, 11, 3), 1)
+    with session_scope() as s:
+        # Later, onto an unrated day: it keeps the rating it was counted as.
+        flares.save_flare(s, fid, started_at=start + timedelta(days=1), **kw)
+        flare = flares.load_flare(s, fid)
+        assert sorted((d.day.day, d.severity) for d in flare.days) == [(7, 3), (8, 2)]
+
+
+def test_edit_dialog_asks_for_a_rating_only_when_moved_earlier():
+    from gwc.web.pages import gout
+
+    assert gout.show_first_day("2026-11-07", None) == ("flex", "How bad is it?")
+    assert gout.show_first_day("2026-11-06", "2026-11-06")[0] == "none"
+    assert gout.show_first_day("2026-11-07", "2026-11-06")[0] == "none"
+    shown, label = gout.show_first_day("2026-11-05", "2026-11-06")
+    assert shown == "flex" and "Thu Nov 5" in label and "Fri Nov 6" in label
+
+
 def test_flare_controls_match_their_callbacks(app):
     """A pattern id only reaches its callback when the keys match exactly."""
     import json

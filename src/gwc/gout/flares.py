@@ -95,7 +95,13 @@ def save_flare(
     severity: int | None = None,
     medications: list[str] | None = None,
 ) -> GoutFlare:
-    """Create a flare (with its first day's severity) or edit when and where it was."""
+    """Create a flare (with its first day's severity) or edit when and where it was.
+
+    Moving the start earlier rates the new first day `severity` (by default the old
+    first day's), and the days up to the old start count the same. Moving it later
+    drops the days before it, keeping the new first day as bad as it was.
+    """
+    old_first = None
     if flare_id is None:
         severity = _check_severity(severity)
         flare = GoutFlare(started_at=started_at, tz=tz, joints=[])
@@ -104,6 +110,7 @@ def save_flare(
         flare = load_flare(s, flare_id)
         if flare is None:
             raise ValueError("Flare not found")
+        old_first = start_day(flare)
     flare.started_at = started_at
     flare.tz = tz
     flare.joints = _clean_list(joints)
@@ -111,10 +118,18 @@ def save_flare(
     first = start_day(flare)
     if flare.ended_on is not None and flare.ended_on < first:
         flare.ended_on = first
+    rate_first = old_first is None or first < old_first
+    if rate_first and old_first is not None:
+        severity = severity or (severity_on(flare, old_first) or (None,))[0]
+        severity = _check_severity(severity)
+    if old_first is not None and first > old_first:
+        carried = severity_on(flare, first)
+        if carried is not None and carried[1]:
+            flare.days.append(GoutDay(day=first, severity=carried[0], medications=[]))
     # Days before a moved start no longer belong to this flare.
     flare.days = [d for d in flare.days if d.day >= first]
     s.flush()
-    if flare_id is None:
+    if rate_first:
         set_day(s, flare.id, first, severity, medications, None)
     return flare
 
