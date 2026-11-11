@@ -11,8 +11,9 @@ from gwc.analysis.food_day import FoodDays
 from gwc.analysis.targets import manual_targets, set_manual_targets
 from gwc.analysis.units import G_PER_OZ, fmt_weight, kg_to, to_kg
 from gwc.db.migrate import upgrade
-from gwc.db.models import Food, FoodLog, FoodSource, LogSource
+from gwc.db.models import Food, FoodLog, FoodSource, GoutProfile, LogSource
 from gwc.db.session import session_scope
+from gwc.gout.profiles import save_profile
 from gwc.nutrition import foods, log
 from gwc.nutrition.nutrients import scale
 from gwc.nutrition.usda import (
@@ -267,6 +268,67 @@ def test_update_and_delete_entry(db):
         log.delete_entry(s, entry_id)
     with session_scope() as s:
         assert s.scalars(select(FoodLog)).all() == []
+
+
+def test_repeat_entry_follows_the_library_food(db):
+    with session_scope() as s:
+        egg = _egg(s)
+        unit, _ = foods.default_unit(egg)
+        old = log.log_food(
+            s, food_id=egg.id, amount=2, unit=unit, eaten_at=utc(2026, 10, 20, 6, 0), tz="UTC"
+        )
+        old.food_day_override = date(2026, 10, 19)
+        egg.kcal, egg.name = 200, "Pasture egg"
+
+        new = log.repeat_entry(s, old.id, eaten_at=utc(2026, 11, 1, 7, 0), tz="America/New_York")
+
+        assert new.id != old.id and new.food_id == egg.id
+        assert (new.grams, new.amount, new.unit_label) == (100, 2, "2 × 1 large")
+        assert (new.description, new.kcal) == ("Pasture egg", 200)
+        assert (new.eaten_at, new.tz) == (utc(2026, 11, 1, 7, 0), "America/New_York")
+        assert new.food_day_override is None
+        assert old.kcal == pytest.approx(143)
+
+
+def test_repeat_entry_keeps_a_one_offs_numbers_and_gout_profile(db):
+    with session_scope() as s:
+        meal = FoodLog(
+            eaten_at=utc(2026, 10, 20, 12, 0),
+            tz="UTC",
+            description="Burrito",
+            grams=350,
+            amount=350,
+            unit_label="1 burrito (350 g)",
+            source=LogSource.AI,
+            note="Estimated by Claude",
+            kcal=900,
+            protein_g=40,
+        )
+        s.add(meal)
+        s.flush()
+        save_profile(
+            s,
+            food_log_id=meal.id,
+            purine_mg=80,
+            animal_purine_mg=50,
+            alcohol_g=0,
+            sweet_drink=False,
+            source="manual",
+            note="Set by you",
+        )
+
+        new = log.repeat_entry(s, meal.id, eaten_at=utc(2026, 11, 1, 7, 0), tz="UTC")
+
+        assert new.food_id is None and new.source is LogSource.AI
+        assert (new.description, new.unit_label) == ("Burrito", "1 burrito (350 g)")
+        assert (new.kcal, new.protein_g, new.note) == (900, 40, "Estimated by Claude")
+        profile = s.scalars(select(GoutProfile).where(GoutProfile.food_log_id == new.id)).one()
+        assert (profile.purine_mg, profile.source) == (80, "manual")
+
+
+def test_repeat_entry_missing(db):
+    with session_scope() as s, pytest.raises(ValueError, match="not found"):
+        log.repeat_entry(s, 999, eaten_at=utc(2026, 11, 1, 7, 0), tz="UTC")
 
 
 def test_scale_entry(db):

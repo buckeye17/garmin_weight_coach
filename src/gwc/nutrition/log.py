@@ -8,7 +8,8 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from gwc.analysis.food_day import FoodDays
-from gwc.db.models import Food, FoodDayStatus, FoodLog, LogSource
+from gwc.db.models import Food, FoodDayStatus, FoodLog, GoutProfile, LogSource
+from gwc.gout.profiles import save_profile
 from gwc.nutrition.foods import (
     RECIPE_LABEL,
     RECIPE_UNIT,
@@ -145,6 +146,50 @@ def update_entry(
     entry.food_day_override = food_day_override
     entry.note = note or None
     return entry
+
+
+def repeat_entry(s: Session, entry_id: int, *, eaten_at: datetime, tz: str) -> FoodLog:
+    """Log an entry again in the same portion, in whichever food day `eaten_at` falls.
+
+    A library food uses its current numbers, as logging it fresh would. A one-off keeps
+    its own, and its gout profile, which would otherwise be estimated all over again.
+    """
+    entry = s.get(FoodLog, entry_id)
+    if entry is None:
+        raise ValueError("Entry not found")
+    food = load_food(s, entry.food_id) if entry.food_id else None
+    repeat = FoodLog(
+        eaten_at=eaten_at,
+        tz=tz,
+        food_id=entry.food_id,
+        description=food.name if food else entry.description,
+        grams=entry.grams,
+        amount=entry.amount,
+        unit_label=entry.unit_label,
+        source=entry.source,
+        note=entry.note,
+    )
+    _apply(
+        repeat,
+        scale(per100_of(food), entry.grams)
+        if food
+        else {k: getattr(entry, k) for k in NUTRIENT_KEYS},
+    )
+    s.add(repeat)
+    s.flush()
+    profile = s.scalars(select(GoutProfile).where(GoutProfile.food_log_id == entry.id)).first()
+    if food is None and profile is not None:
+        save_profile(
+            s,
+            food_log_id=repeat.id,
+            purine_mg=profile.purine_mg,
+            animal_purine_mg=profile.animal_purine_mg,
+            alcohol_g=profile.alcohol_g,
+            sweet_drink=profile.sweet_drink,
+            source=profile.source,
+            note=profile.note,
+        )
+    return repeat
 
 
 def _scaled_label(label: str, factor: Fraction, grams: float) -> str:

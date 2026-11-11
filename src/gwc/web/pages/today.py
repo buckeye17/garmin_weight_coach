@@ -2,7 +2,8 @@
 
 Step through days or pick one; `?day=YYYY-MM-DD` opens a past day (Log's "Back"
 link). Entries open an editor for amount, portion, time and food day, and a
-one-off entry can be saved to the library from there.
+one-off entry can be saved to the library from there. A past day's entries also
+have a button that logs them again for now.
 
 The Activity card lists the day's workouts: Garmin's after a sync, and any added
 here with a guess at the calories they burned beyond resting.
@@ -12,7 +13,7 @@ from datetime import date, timedelta
 
 import dash
 import dash_mantine_components as dmc
-from dash import ALL, Input, Output, State, callback, ctx, dcc, html, no_update
+from dash import ALL, MATCH, Input, Output, State, callback, ctx, dcc, html, no_update
 from dash.exceptions import PreventUpdate
 
 from gwc.analysis import exercise
@@ -334,9 +335,7 @@ def layout(day: str | None = None, **_kwargs):
                                             [
                                                 dmc.Title("Entries", order=5),
                                                 dmc.Text(
-                                                    "Tap one to change its amount or time",
-                                                    size="xs",
-                                                    c="dimmed",
+                                                    id="day-entries-hint", size="xs", c="dimmed"
                                                 ),
                                             ],
                                             justify="space-between",
@@ -392,17 +391,19 @@ def layout(day: str | None = None, **_kwargs):
     )
 
 
-def _entry_row(e: FoodLog, day: date) -> dmc.UnstyledButton:
+def _entry_row(e: FoodLog, day: date, is_past: bool):
     macros = f"P {e.protein_g:,.0f} · C {e.carbs_g:,.0f} · F {e.fat_g:,.0f}"
     amount = e.unit_label or f"{e.grams:,.0f} g"
-    return dmc.UnstyledButton(
+    row = dmc.UnstyledButton(
         dmc.Paper(
             dmc.Group(
                 [
                     dmc.Text(fmt_clock(e.eaten_at, day), size="xs", c="dimmed", w=72),
                     dmc.Stack(
                         [
-                            dmc.Text(e.description, size="sm", fw=500, lineClamp=1),
+                            dmc.Text(
+                                e.description, size="sm", fw=500, lineClamp=2 if is_past else 1
+                            ),
                             dmc.Text(f"{amount} · {macros}", size="xs", c="dimmed", lineClamp=1),
                         ],
                         gap=0,
@@ -426,6 +427,22 @@ def _entry_row(e: FoodLog, day: date) -> dmc.UnstyledButton:
         ),
         id={"type": "entry-row", "index": e.id},
         w="100%",
+    )
+    if not is_past:
+        return row
+    return dmc.Group(
+        [
+            dmc.Box(row, flex=1, miw=0),
+            dmc.ActionIcon(
+                icon("tabler:plus", 16),
+                id={"type": "entry-repeat", "index": e.id},
+                variant="light",
+                size="lg",
+                **{"aria-label": f"Log {e.description} for today"},
+            ),
+        ],
+        gap=6,
+        wrap="nowrap",
     )
 
 
@@ -569,6 +586,7 @@ def change_day(_prev, _next, _today, picked, selected):
     Output("day-today", "display"),
     Output("day-add", "href"),
     Output("day-add-btn", "children"),
+    Output("day-entries-hint", "children"),
     Output("day-gout", "children"),
     Input("day-selected", "data"),
     Input("edit-done", "data"),
@@ -585,7 +603,7 @@ def render_day(selected, _edited):
         plan = day_targets(s, zone, now(), day)
         targets = plan.values
         incomplete = log.is_incomplete(s, day)
-        entry_rows = [_entry_row(e, day) for e in entries] or [
+        entry_rows = [_entry_row(e, day, day < today) for e in entries] or [
             dmc.Text("Nothing logged for this day yet.", size="sm", c="dimmed")
         ]
         activity_rows = [_activity_row(w, day) for w in plan.workouts] or [
@@ -648,6 +666,7 @@ def render_day(selected, _edited):
         "none" if day == today else "block",
         "/log" if day == today else f"/log?day={day.isoformat()}",
         "Log food" if day == today else "Add to this day",
+        "Tap one to change its amount or time" if day == today else "Tap to edit, + to log today",
         gout,
     )
 
@@ -776,6 +795,21 @@ def save_activity(save, delete, activity_id, name, kcal, selected, done):
     except ValueError as e:
         return no_update, no_update, str(e)
     return False, (done or 0) + 1, ""
+
+
+@callback(
+    Output({"type": "entry-repeat", "index": MATCH}, "children"),
+    Output({"type": "entry-repeat", "index": MATCH}, "disabled"),
+    Input({"type": "entry-repeat", "index": MATCH}, "n_clicks"),
+    prevent_initial_call=True,
+)
+def repeat_for_today(clicks):
+    """Log a past entry again for now; the tick also stops a double tap logging it twice."""
+    if not clicks:
+        raise PreventUpdate
+    with session_scope() as s:
+        log.repeat_entry(s, ctx.triggered_id["index"], eaten_at=now(), tz=str(tz()))
+    return icon("tabler:check", 16), True
 
 
 @callback(

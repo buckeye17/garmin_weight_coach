@@ -183,6 +183,34 @@ def test_analysis_callbacks_render(seeded):
     assert rendered[5] == "block"  # no goal set → maintenance hint
 
 
+def test_only_past_entries_can_be_logged_for_today(seeded):
+    from datetime import timedelta
+
+    from gwc.analysis.food_day import current_food_day
+    from gwc.db.models import FoodLog, LogSource
+    from gwc.db.session import session_scope
+    from gwc.db.types import utcnow
+    from gwc.web.components.common import tz
+    from gwc.web.pages import today
+
+    with session_scope() as s:
+        current = current_food_day(s, tz(), utcnow())
+        s.add(
+            FoodLog(
+                eaten_at=utcnow(),
+                tz=str(tz()),
+                description="y",
+                grams=100,
+                kcal=100,
+                source=LogSource.CUSTOM,
+            )
+        )
+    yesterday = (current - timedelta(days=1)).isoformat()  # i=1 in `seeded` has an entry
+    past, now_ = today.render_day(yesterday, 0), today.render_day(None, 0)
+    assert "entry-repeat" in str(past[8]) and "+ to log today" in past[-2]
+    assert "entry-row" in str(now_[8]) and "entry-repeat" not in str(now_[8])
+
+
 def test_analysis_callbacks_render_empty(app, isolated_settings):
     from gwc.db.migrate import upgrade
     from gwc.web.pages import projection, trends
