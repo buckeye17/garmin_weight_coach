@@ -20,7 +20,14 @@ from gwc.analysis.food_day import FoodDays
 from gwc.analysis.projection import project, simulate
 from gwc.analysis.snapshot import build_snapshot
 from gwc.analysis.tdee import adaptive_tdee, choose, fit_start, garmin_tdee, linear_slope
-from gwc.analysis.trend import Weighin, daily_weighins, ewma, weight_trend
+from gwc.analysis.trend import (
+    COAST_DAYS,
+    Weighin,
+    daily_weighins,
+    ewma,
+    linear_trend,
+    weight_trend,
+)
 from gwc.analysis.units import KG_PER_LB
 from gwc.db.migrate import upgrade
 from gwc.db.models import (
@@ -92,13 +99,48 @@ def test_ewma_after_warmup():
     assert ewma(values, 0.1, day(10))[day(10)] == pytest.approx(99.0)
 
 
+def test_linear_trend_settles_on_a_steady_loss():
+    values = {day(i): 100 - 0.1 * i for i in range(120)}
+    last = values[day(119)]
+    # The plain average trails by (1 − α)/α days of loss; the linear trend doesn't.
+    assert ewma(values, 0.1, day(119))[day(119)] == pytest.approx(last + 0.9, abs=0.01)
+    assert linear_trend(values, 0.1, day(119))[day(119)] == pytest.approx(last, abs=0.01)
+
+
+def test_linear_trend_keeps_up_when_weighing_every_other_day():
+    values = {day(i): 100 - 0.1 * i for i in range(0, 240, 2)}
+    assert linear_trend(values, 0.1, day(238))[day(238)] == pytest.approx(76.2, abs=0.01)
+
+
+def test_linear_trend_starts_at_first_value_and_warms_up():
+    out = linear_trend({day(0): 100.0, day(3): 90.0}, 0.1, day(4))
+    assert list(out) == [day(i) for i in range(5)]
+    assert out[day(0)] == out[day(1)] == out[day(2)] == 100
+    assert out[day(3)] == pytest.approx(95.0)  # warm-up: running mean of 2
+    assert out[day(4)] == pytest.approx(94.9)  # then along the slope it just learned
+
+
+def test_linear_trend_is_flat_for_a_steady_weight():
+    values = {day(i): 80.0 for i in range(30)}
+    assert set(linear_trend(values, 0.1, day(40)).values()) == {80.0}
+
+
+def test_linear_trend_coasts_through_a_break_then_holds():
+    values = {day(i): 100 - 0.1 * i for i in range(120)}
+    out = linear_trend(values, 0.1, day(119 + COAST_DAYS + 5))
+    at_break = out[day(119)]
+    assert out[day(119 + COAST_DAYS)] == pytest.approx(at_break - 0.1 * COAST_DAYS, abs=0.01)
+    assert out[day(119 + COAST_DAYS + 5)] == out[day(119 + COAST_DAYS)]
+
+
 def test_weight_trend_tracks_body_fat_separately():
     ws = [Weighin(day(0), 100, None), Weighin(day(1), 99, 30.0), Weighin(day(2), 98, 32.0)]
     pts = weight_trend(ws, 0.5, day(3))
     assert pts[0].fat_trend_pct is None and pts[0].fat_kg is None
     assert pts[2].fat_trend_pct == pytest.approx(31.0)
     assert pts[3].weight_kg is None
-    assert pts[3].trend_kg == pts[2].trend_kg
+    assert pts[2].trend_kg == pytest.approx(98.25)
+    assert pts[3].trend_kg == pytest.approx(97.75)  # no weigh-in: follows the slope
     assert pts[3].fat_kg == pytest.approx(pts[3].trend_kg * 0.31)
 
 

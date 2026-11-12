@@ -5,7 +5,7 @@
 - Adaptive: what you must have burned given what you ate and how your weight
   moved: mean intake on complete food days − ρ × weight slope. The slope is a
   least-squares fit to the daily weigh-ins in the window rather than the
-  change in the smoothed trend, which lags real changes by ~10 days.
+  change in the smoothed trend, which takes weeks to settle on a new rate.
   Intake and weigh-ins come from the same days: from the first complete food
   day in the window, and when that's the start of logging after a break, from
   a week later, since the first days of a diet shed water and glycogen that

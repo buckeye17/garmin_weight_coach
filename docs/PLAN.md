@@ -193,7 +193,7 @@ The **library** is the non-archived rows of `food`. Food joins it only deliberat
 ## 7. Analysis
 
 ### 7.1 Weight trend
-Exponentially weighted moving average of daily weigh-ins (α = 0.1 by default, Hacker's Diet style), warmed up as a running mean over the first 1/α weigh-ins so an outlier first reading doesn't skew it for weeks. Multiple weigh-ins per day are averaged; missing days are carried by the trend.
+A level-and-slope trend of daily weigh-ins (Brown's double exponential smoothing, α = 0.1 by default): each day the trend moves along its slope and each weigh-in corrects both, so it settles on the weigh-ins during a steady loss instead of trailing ~1/α weigh-ins above them as a plain moving average does. The level is warmed up as a running mean over the first few weigh-ins so an outlier first reading doesn't skew it for weeks. Multiple weigh-ins per day are averaged; missing days follow the slope for up to a week, then hold flat. Body fat % keeps a plain exponentially weighted moving average.
 
 ### 7.2 Energy density of weight change
 Instead of a flat 3,500 kcal/lb, the fat vs. lean split of loss follows Forbes' relation using fat mass from the scale:
@@ -206,7 +206,7 @@ Instead of a flat 3,500 kcal/lb, the fat vs. lean split of loss follows Forbes' 
 | Method | Calculation | Availability |
 |---|---|---|
 | **Garmin** | mean Garmin total kcal (resting + active) over the last 7 full food days | immediately |
-| **Adaptive (trend-based)** | mean logged intake − ρ × weight slope over a trailing window (default 21 days; needs weigh-ins spanning ≥ 14 days and ≥ 10 complete food days). The slope is a least-squares fit to the daily weigh-ins, not the EWMA trend's change, which lags ~10 days | after ~2–3 weeks of food logging; shows "calibrating" until then |
+| **Adaptive (trend-based)** | mean logged intake − ρ × weight slope over a trailing window (default 21 days; needs weigh-ins spanning ≥ 14 days and ≥ 10 complete food days). The slope is a least-squares fit to the daily weigh-ins, not the smoothed trend's change, which takes weeks to settle on a new rate | after ~2–3 weeks of food logging; shows "calibrating" until then |
 
 Both include whatever workouts you did. Each estimate also reports the mean **net workout kcal** per day over its own days (Garmin activity kcal minus the resting burn for the activity's duration, at the rate of finished days, since Garmin accrues resting kcal through the day), and a **base** burn without it, which targets start from (§7.5).
 

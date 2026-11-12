@@ -1,9 +1,18 @@
-"""Smoothed weight trend: an exponentially weighted moving average (Hacker's Diet style).
+"""Smoothed weight trend that keeps up with a steady loss or gain.
 
-Weigh-ins are grouped by local date and averaged. The trend moves `alpha` of
-the way toward each new day's weight (a running mean over the first 1/alpha
-weigh-ins) and is carried unchanged through days without a weigh-in. Body
-fat % gets the same treatment, since single scale readings are noisy.
+Weigh-ins are grouped by local date and averaged. The weight trend tracks a
+level and a daily slope (Brown's double exponential smoothing): each day it
+moves along the slope, and each weigh-in corrects both. A plain moving average
+trails a steady change by about 1/alpha weigh-ins, which holds the trend above
+every weigh-in during a diet; this one settles on the weigh-ins instead. The
+price is a brief overshoot when the rate changes, and a few weeks of weigh-ins
+before the slope is learned.
+
+Days without a weigh-in follow the slope for up to COAST_DAYS and then hold
+flat, so a long break can't carry the trend far from the last reading.
+
+Body fat % moves too slowly for the lag to matter and single scale readings are
+noisy, so it keeps the plain exponentially weighted moving average.
 """
 
 from dataclasses import dataclass
@@ -14,6 +23,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from gwc.db.models import BodyComp
+
+COAST_DAYS = 7
 
 
 @dataclass(frozen=True)
@@ -58,7 +69,7 @@ def daily_weighins(s: Session, tz: ZoneInfo) -> list[Weighin]:
 
 
 def ewma(values: dict[date, float], alpha: float, end: date) -> dict[date, float]:
-    """Trend for every day from the first value through `end`."""
+    """Moving-average trend for every day from the first value through `end`."""
     if not values:
         return {}
     day = min(values)
@@ -76,9 +87,43 @@ def ewma(values: dict[date, float], alpha: float, end: date) -> dict[date, float
     return out
 
 
+def linear_trend(values: dict[date, float], alpha: float, end: date) -> dict[date, float]:
+    """Level-and-slope trend for every day from the first value through `end`.
+
+    Smoothing the `ewma` a second time and extrapolating from the pair cancels its
+    lag on a steady change; this is that calculation written as one update per day.
+    """
+    if not values:
+        return {}
+    level_gain = alpha * (2 - alpha)
+    slope_gain = alpha * alpha
+    day = min(values)
+    level = values[day]
+    slope = 0.0  # kg per day
+    seen = 0
+    gap = 0  # days since the last value
+    out: dict[date, float] = {}
+    while day <= end:
+        if gap < COAST_DAYS:
+            level += slope
+        if day in values:
+            miss = values[day] - level
+            # Warm-up: a running mean for the first few values, as in `ewma`.
+            seen += 1
+            level += max(level_gain, 1 / seen) * miss
+            if seen > 1:
+                slope += slope_gain * miss
+            gap = 0
+        else:
+            gap += 1
+        out[day] = level
+        day += timedelta(days=1)
+    return out
+
+
 def weight_trend(weighins: list[Weighin], alpha: float, end: date) -> list[TrendPoint]:
     by_day = {w.day: w for w in weighins}
-    weights = ewma({w.day: w.weight_kg for w in weighins}, alpha, end)
+    weights = linear_trend({w.day: w.weight_kg for w in weighins}, alpha, end)
     fats = ewma({w.day: w.body_fat_pct for w in weighins if w.body_fat_pct is not None}, alpha, end)
     return [
         TrendPoint(
