@@ -11,10 +11,12 @@
   a week later, since the first days of a diet shed water and glycogen that
   would otherwise read as fat loss.
 
-Sick and recovery days (sick.py) are left out of both. Garmin's average reaches
-back for 7 ordinary days. The adaptive fit drops their intake and weigh-ins, and
-each stretch of them splits the weigh-ins into segments that share one slope
-but each get their own level, so the water dip, its rebound, and any real change
+Days marked sick are left out of both: illness swings appetite (down at first,
+often up while recovering), activity, resting burn and water weight, none of
+which says much about the weeks ahead. Garmin's average reaches back for 7
+ordinary days. The adaptive fit drops their intake and weigh-ins, and each
+stretch of them splits the weigh-ins into segments that share one slope but
+each get their own level, so the water dip, its rebound, and any real change
 while ill don't move the slope.
 
 Both include whatever workouts you did. `exercise_kcal` is the average net
@@ -98,7 +100,7 @@ def step_stats(days: list[DayRecord]) -> dict[str, float | None]:
 
 def garmin_tdee(ended: list[DayRecord], n: int = GARMIN_DAYS) -> TdeeEstimate:
     """`ended` is food days before today, oldest first."""
-    days = [d for d in ended if d.has_garmin and d.typical][-n:]
+    days = [d for d in ended if d.has_garmin and not d.sick][-n:]
     if not days:
         return TdeeEstimate("garmin", None, None, False, "No Garmin daily totals yet.")
     totals = [d.garmin_total for d in days]
@@ -165,15 +167,15 @@ def linear_slope(
 
 
 def segments_of(days: list[DayRecord]) -> dict[date, int]:
-    """Segment number of each ordinary day: one more after each stretch of off days."""
+    """Segment number of each day not sick: one more after each stretch of sick days."""
     out: dict[date, int] = {}
-    seg, prev_typical = 0, True
+    seg, prev_sick = 0, False
     for d in days:
-        if d.typical:
+        if not d.sick:
             out[d.day] = seg
-        elif prev_typical:
+        elif not prev_sick:
             seg += 1
-        prev_typical = d.typical
+        prev_sick = d.sick
     return out
 
 
@@ -219,7 +221,7 @@ def adaptive_tdee(
         return TdeeEstimate("adaptive", None, None, False, f"Calibrating: {note}.")
     first = days[0].day
     seg = segments_of(days)
-    ordinary = [d for d in days if d.typical]
+    ordinary = [d for d in days if not d.sick]
     off = len(days) - len(ordinary)
     complete = [d.kcal for d in ordinary if d.complete]
     used = [w for w in weighins if w.day in seg]
@@ -258,7 +260,7 @@ def adaptive_tdee(
         True,
         f"From {len(complete)} complete food days and {len(points)} weigh-ins "
         f"in the last {window} days"
-        + (f", leaving out {off} sick or recovery day{'s' * (off != 1)}." if off else "."),
+        + (f", leaving out {off} sick day{'s' * (off != 1)}." if off else "."),
         days_used=len(complete),
         intake_kcal=intake,
         slope_kg_per_week=slope * 7,

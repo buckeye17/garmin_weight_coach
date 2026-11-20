@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import select
 
 from fakes import utc
-from gwc.analysis import energy, sick, targets
+from gwc.analysis import energy, targets
 from gwc.analysis.days import DayRecord, load_days
 from gwc.analysis.exercise import (
     EAT_BACK_PREF,
@@ -718,19 +718,6 @@ def test_manual_activity_needs_a_sensible_guess(db, kcal):
 # --------------------------------------------------------------------------- sick days
 
 
-def test_sick_statuses_add_recovery_after_each_stretch():
-    out = sick.statuses({day(1), day(2), day(4)}, 2)
-    assert out == {
-        day(1): sick.SICK,
-        day(2): sick.SICK,
-        day(3): sick.RECOVERING,
-        day(4): sick.SICK,  # sick again mid-recovery stays sick
-        day(5): sick.RECOVERING,
-        day(6): sick.RECOVERING,
-    }
-    assert sick.statuses({day(1)}, 0) == {day(1): sick.SICK}
-
-
 def test_linear_slope_with_segments_shares_the_slope():
     # Same slope, with the level dropping 3 kg between the segments.
     points = [(x, 100 - 0.1 * x) for x in range(5)] + [(x, 97 - 0.1 * x) for x in range(9, 15)]
@@ -742,25 +729,25 @@ def test_linear_slope_with_segments_shares_the_slope():
 
 def test_garmin_tdee_reaches_back_past_sick_days():
     days = [rec(i, garmin=3000) for i in range(10)]
-    days += [rec(i, garmin=2200, status=sick.SICK) for i in range(10, 12)]
-    days += [rec(12, garmin=2600, status=sick.RECOVERING)]
+    days += [rec(i, garmin=2200, sick=True) for i in range(10, 12)]
+    days += [rec(12, garmin=2600, sick=True)]
     est = garmin_tdee(days)
     assert est.kcal == 3000 and est.days_used == 7
 
 
 def _sick_spell():
-    """Losing 0.1 kg/day on 2,500 kcal; sick on days 10–11 (eating 800, 2 kg of water
-    off), recovering on 12–14 (eating 3,500, water back), and 0.5 kg of real loss
-    over the spell."""
+    """Losing 0.1 kg/day on 2,500 kcal; sick on days 10–14: eating 800 with 2 kg of
+    water off at first, then 3,500 as appetite comes back with the water, and 0.5 kg
+    of real loss over the spell."""
     records, weighins = [], []
     for i in range(28):
         kg = 120 - 0.1 * i - (0.5 if i >= 15 else 0)
-        status, kcal = None, 2500
+        sick, kcal = False, 2500
         if i in (10, 11):
-            status, kcal, kg = sick.SICK, 800, kg - 2
+            sick, kcal, kg = True, 800, kg - 2
         elif i in (12, 13, 14):
-            status, kcal, kg = sick.RECOVERING, 3500, kg - 1
-        records.append(rec(i, kcal=kcal, status=status))
+            sick, kcal, kg = True, 3500, kg - 1
+        records.append(rec(i, kcal=kcal, sick=sick))
         weighins.append(Weighin(day(i), kg, None))
     return records, weighins
 
@@ -770,9 +757,9 @@ def test_adaptive_tdee_leaves_out_a_sick_spell():
     est = adaptive_tdee(records, weighins, rho=7700, window=28)
     assert est.ready and est.days_used == 23
     assert est.kcal == pytest.approx(2500 + 770)
-    assert "leaving out 5 sick or recovery days" in est.note
+    assert "leaving out 5 sick days" in est.note
     # Without the flags, the spell skews it.
-    plain = [DayRecord(**{**r.__dict__, "status": None}) for r in records]
+    plain = [DayRecord(**{**r.__dict__, "sick": False}) for r in records]
     assert abs(adaptive_tdee(plain, weighins, rho=7700, window=28).kcal - 3270) > 100
 
 
@@ -788,18 +775,17 @@ def test_weight_trend_steps_over_sick_weigh_ins():
 def test_sick_days_in_database_and_snapshot(db):
     with session_scope() as s:
         _seed(s)
-        set_pref(sick.RECOVERY_PREF, 2)
-        log.set_sick(s, date(2026, 10, 16), True)
-        log.set_sick(s, date(2026, 10, 17), True)
+        for d in (16, 17, 18, 19):
+            log.set_sick(s, date(2026, 10, d), True)
+        log.set_sick(s, date(2026, 10, 19), False)
+        log.set_sick(s, date(2026, 10, 19), True)
     with session_scope() as s:
-        assert log.is_sick(s, date(2026, 10, 16)) and not log.is_sick(s, date(2026, 10, 18))
-        assert sick.recovery_day(s, date(2026, 10, 19)) == (2, 2)
-        assert sick.recovery_day(s, date(2026, 10, 20)) is None
+        assert log.is_sick(s, date(2026, 10, 16)) and not log.is_sick(s, date(2026, 10, 20))
         recs = load_days(s, NY, date(2026, 10, 15), date(2026, 10, 20))
         snap = build_snapshot(s, NY, NOW)
-    assert [r.status for r in recs] == [None, "sick", "sick", "recovering", "recovering", None]
-    assert set(snap.off_days) == {date(2026, 10, d) for d in (16, 17, 18, 19)}
-    # 7 ordinary days, reaching back past the four off ones; what was eaten still counts.
+    assert [r.sick for r in recs] == [False, True, True, True, True, False]
+    assert snap.sick_days == {date(2026, 10, d) for d in (16, 17, 18, 19)}
+    # 7 ordinary days, reaching back past the four sick ones; what was eaten still counts.
     assert [d.day.day for d in snap.typical7] == list(range(9, 16))
     assert len(snap.intakes7) == 7 and len(snap.recent_intakes) == 7
     assert snap.garmin.ready and snap.garmin.days_used == 7

@@ -37,7 +37,7 @@ def rgba(hex_color: str, alpha: float) -> str:
 
 
 def weighin_marker(scheme: str | None, off: list[bool]) -> dict:
-    """Weigh-in dots, hollow on sick and recovery days (which the trend ignores)."""
+    """Weigh-in dots, hollow on sick days (which the trend ignores)."""
     muted = ink(scheme, "muted")
     return {
         "color": muted,
@@ -47,10 +47,9 @@ def weighin_marker(scheme: str | None, off: list[bool]) -> dict:
     }
 
 
-def off_note(off_days: dict, day) -> str:
-    """Hover suffix for a sick or recovery day, e.g. " · sick, left out"."""
-    status = off_days.get(day)
-    return f" · {status}, left out" if status else ""
+def sick_note(sick_days: set, day) -> str:
+    """Hover suffix for a day marked sick."""
+    return " · sick, left out" if day in sick_days else ""
 
 
 def figure(scheme: str | None, y_title: str = "", height: int = 300) -> go.Figure:

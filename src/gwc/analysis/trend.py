@@ -11,7 +11,7 @@ before the slope is learned.
 Days without a weigh-in follow the slope for up to COAST_DAYS and then hold
 flat, so a long break can't carry the trend far from the last reading.
 
-Weigh-ins on sick and recovery days (`skip`, see sick.py) are water swings,
+Weigh-ins on days marked sick (`skip`) are mostly water swings,
 so the trend steps over them like days without a weigh-in.
 
 Body fat % moves too slowly for the lag to matter and single scale readings are

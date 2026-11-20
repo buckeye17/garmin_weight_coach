@@ -60,7 +60,7 @@ def layout(**_kwargs):
                         charts.graph("proj-graph", height=340),
                         dmc.Text(
                             "Shaded bands: 10th–90th percentile. Lines start at today's trend "
-                            "weight; dots are weigh-ins (hollow on sick or recovery days).",
+                            "weight; dots are weigh-ins (hollow on sick days).",
                             size="xs",
                             c="dimmed",
                         ),
@@ -120,8 +120,8 @@ def _figure(
         y=[kg_to(w.weight_kg, unit) for w in raw],
         mode="markers",
         name="Weigh-ins",
-        marker=charts.weighin_marker(scheme, [w.day in snap.off_days for w in raw]),
-        customdata=[charts.off_note(snap.off_days, w.day) for w in raw],
+        marker=charts.weighin_marker(scheme, [w.day in snap.sick_days for w in raw]),
+        customdata=[charts.sick_note(snap.sick_days, w.day) for w in raw],
         hovertemplate="%{y:.1f}%{customdata}",
         showlegend=False,
     )
@@ -255,9 +255,9 @@ def _tdee_rows(snap: Snapshot) -> list:
 def _day_rows(snap: Snapshot) -> list:
     rows = []
     for d in reversed(snap.last7):
-        if not d.typical:
+        if d.sick:
             food = dmc.Badge(
-                f"{d.status.capitalize()}" + (f" · {fmt_kcal(d.kcal)}" if d.entries else ""),
+                "Sick" + (f" · {fmt_kcal(d.kcal)}" if d.entries else ""),
                 size="sm",
                 color="grape",
                 variant="light",
@@ -299,11 +299,7 @@ def _alerts(snap: Snapshot) -> list:
             if n < snap_mod.MIN_LOGGED_FOR_PROJECTION
             else "is rough until 5 are logged"
         )
-        which = (
-            "ordinary food days (skipping sick and recovery days)"
-            if any(not d.typical for d in snap.last7)
-            else "food days"
-        )
+        which = "food days not marked sick" if any(d.sick for d in snap.last7) else "food days"
         out.append(
             dmc.Alert(
                 f"{n} of the last 7 {which} are fully logged, so the 'as eaten' "
@@ -365,7 +361,7 @@ def render(scheme):
         f"{burn.label} · ± {burn.se:,.0f}" if burn.ready else burn.note,
         fmt_kcal(sum(intakes) / len(intakes)) if intakes else "—",
         f"{len(intakes)}/7 days logged"
-        + (" · sick days skipped" if any(not d.typical for d in snap.last7) else ""),
+        + (" · sick days skipped" if any(d.sick for d in snap.last7) else ""),
         fmt_weight(first.expected[-1], unit) if first else "—",
         (
             f"{first.label} · {fmt_rate(first.change_kg * DAYS_PER_MONTH / 28, unit)}"

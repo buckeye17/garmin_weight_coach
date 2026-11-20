@@ -6,10 +6,11 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
-from gwc.analysis import energy, sick, tdee
+from gwc.analysis import energy, tdee
 from gwc.analysis.days import DayRecord, load_days
 from gwc.analysis.food_day import current_food_day
 from gwc.analysis.trend import TrendPoint, Weighin, daily_weighins, weight_trend
+from gwc.nutrition import log
 from gwc.prefs import get_pref
 
 LAST_DAYS = 7
@@ -31,8 +32,8 @@ class Snapshot:
     adaptive: tdee.TdeeEstimate
     chosen: tdee.TdeeEstimate
     kcal_per_kg_lost: float
-    # Sick and recovery days through today (sick.py), for every day with a weigh-in.
-    off_days: dict[date, str] = field(default_factory=dict)
+    # Days marked sick through today, for every day with a weigh-in.
+    sick_days: set[date] = field(default_factory=set)
 
     @property
     def weight_kg(self) -> float | None:
@@ -55,8 +56,8 @@ class Snapshot:
 
     @property
     def typical7(self) -> list[DayRecord]:
-        """The last 7 ended food days that weren't sick or recovery days."""
-        return [d for d in self.ended if d.typical][-LAST_DAYS:]
+        """The last 7 ended food days that weren't sick."""
+        return [d for d in self.ended if not d.sick][-LAST_DAYS:]
 
     @property
     def intakes7(self) -> list[float]:
@@ -78,8 +79,8 @@ def build_snapshot(s: Session, tz: ZoneInfo, now: datetime, history_days: int = 
     records = load_days(s, tz, today - timedelta(days=span), today)
 
     weighins = daily_weighins(s, tz)
-    off_days = sick.load_statuses(s, None, today)
-    trend = weight_trend(weighins, alpha, today, skip=off_days)
+    sick_days = log.sick_days(s, None, today)
+    trend = weight_trend(weighins, alpha, today, skip=sick_days)
     current = trend[-1] if trend else None
     fat_kg = assumed = rho = None
     if current is not None:
@@ -108,5 +109,5 @@ def build_snapshot(s: Session, tz: ZoneInfo, now: datetime, history_days: int = 
         adaptive=adaptive,
         chosen=tdee.choose(method, garmin, adaptive),
         kcal_per_kg_lost=float(get_pref("analysis.kcal_per_kg_lost", session=s)),
-        off_days=off_days,
+        sick_days=sick_days,
     )

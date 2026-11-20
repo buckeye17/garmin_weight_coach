@@ -4,7 +4,6 @@ from dash import ALL, Input, Output, State, callback, dcc, no_update
 from dash_iconify import DashIconify
 
 from gwc.analysis.exercise import EAT_BACK_PREF, STEPS_PREF
-from gwc.analysis.sick import MAX_RECOVERY_DAYS, RECOVERY_PREF
 from gwc.analysis.snapshot import build_snapshot
 from gwc.analysis.targets import (
     TDEE_METHOD_PREF,
@@ -298,14 +297,6 @@ def _targets_card() -> dmc.Card:
                 label="Trend-based burn window (days)",
                 min=14,
                 max=56,
-                allowDecimal=False,
-            ),
-            dmc.NumberInput(
-                id="adv-recovery",
-                label="Recovery days after being sick",
-                description="Also left out of projections",
-                min=0,
-                max=MAX_RECOVERY_DAYS,
                 allowDecimal=False,
             ),
         ],
@@ -673,7 +664,6 @@ def sync_now(_clicks, signal):
     Output("adv-kcal-kg", "value"),
     Output("adv-alpha", "value"),
     Output("adv-window", "value"),
-    Output("adv-recovery", "value"),
     Input("prefs-load", "data"),
 )
 def load_prefs(_):
@@ -690,7 +680,6 @@ def load_prefs(_):
         get_pref("analysis.kcal_per_kg_lost"),
         get_pref("analysis.trend_alpha"),
         get_pref("analysis.adaptive_window_days"),
-        get_pref(RECOVERY_PREF),
     )
 
 
@@ -763,12 +752,11 @@ def _clamp(value, lo: float, hi: float, default: float) -> float:
     State("adv-kcal-kg", "value"),
     State("adv-alpha", "value"),
     State("adv-window", "value"),
-    State("adv-recovery", "value"),
     State("prefs-saved", "data"),
     prevent_initial_call=True,
 )
 def save_targets(
-    _clicks, goal, method, eat_back, steps, values, weekly, kcal_kg, alpha, window, recovery, saved
+    _clicks, goal, method, eat_back, steps, values, weekly, kcal_kg, alpha, window, saved
 ):
     set_goal(None if goal in (None, "") else to_kg(float(goal), weight_unit()))
     set_pref(TDEE_METHOD_PREF, method or "auto")
@@ -779,7 +767,6 @@ def save_targets(
     set_pref("analysis.kcal_per_kg_lost", _clamp(kcal_kg, 0, 60, 22.0))
     set_pref("analysis.trend_alpha", _clamp(alpha, 0.02, 0.5, 0.1))
     set_pref("analysis.adaptive_window_days", int(_clamp(window, 14, 56, 21)))
-    set_pref(RECOVERY_PREF, int(_clamp(recovery, 0, MAX_RECOVERY_DAYS, 3)))
     refreeze_today(tz(), utcnow())
     return "Saved. Today's targets were updated.", (saved or 0) + 1
 
