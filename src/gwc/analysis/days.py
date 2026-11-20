@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from gwc.analysis.exercise import manual_by_food_day, net_by_calendar_date
 from gwc.analysis.food_day import FoodDays
+from gwc.analysis.sick import load_statuses
 from gwc.db.models import DailySummary
 from gwc.nutrition import log
 
@@ -28,11 +29,18 @@ class DayRecord:
     garmin_exercise: float = 0.0
     # Kcal above resting of workouts entered in the app, which Garmin's totals don't include.
     manual_exercise: float = 0.0
+    # "sick" or "recovering" (sick.py): left out of projections. None on an ordinary day.
+    status: str | None = None
 
     @property
     def complete(self) -> bool:
         """Logged and not flagged as partial: counts toward averages."""
         return self.entries > 0 and not self.marked_incomplete
+
+    @property
+    def typical(self) -> bool:
+        """Not sick or recovering, so it says something about the days ahead."""
+        return self.status is None
 
     @property
     def kcal(self) -> float | None:
@@ -69,6 +77,7 @@ def load_days(s: Session, tz: ZoneInfo, start: date, end: date) -> list[DayRecor
     }
     exercise = net_by_calendar_date(s, tz, start, end)
     manual = manual_by_food_day(s, start, end)
+    statuses = load_statuses(s, start, end)
     out = []
     day = start
     while day <= end:
@@ -87,6 +96,7 @@ def load_days(s: Session, tz: ZoneInfo, start: date, end: date) -> list[DayRecor
                 garmin_provisional=bool(g and g.is_provisional),
                 garmin_exercise=exercise.get(day, 0.0),
                 manual_exercise=manual.get(day, 0.0),
+                status=statuses.get(day),
             )
         )
         day += timedelta(days=1)

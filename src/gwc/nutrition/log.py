@@ -348,3 +348,26 @@ def set_incomplete(s: Session, day: date, incomplete: bool) -> None:
         row = FoodDayStatus(food_day=day)
         s.add(row)
     row.is_incomplete = incomplete
+
+
+def sick_days(s: Session, start: date | None, end: date) -> set[date]:
+    """Food days marked sick from `start` (or the beginning) through `end`."""
+    q = select(FoodDayStatus.food_day).where(
+        FoodDayStatus.is_sick.is_(True), FoodDayStatus.food_day <= end
+    )
+    if start is not None:
+        q = q.where(FoodDayStatus.food_day >= start)
+    return set(s.scalars(q))
+
+
+def is_sick(s: Session, day: date) -> bool:
+    row = s.get(FoodDayStatus, day)
+    return bool(row and row.is_sick)
+
+
+def set_sick(s: Session, day: date, sick: bool) -> None:
+    row = s.get(FoodDayStatus, day)
+    if row is None:
+        row = FoodDayStatus(food_day=day, is_incomplete=False)
+        s.add(row)
+    row.is_sick = sick

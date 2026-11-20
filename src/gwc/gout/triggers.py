@@ -241,7 +241,8 @@ def weight_factor(s: Session, tz: ZoneInfo, at: datetime) -> Factor:
         levels.append(_rate(pace, PACE_ELEVATED, PACE_HIGH))
     snap = build_snapshot(s, tz, at)
     burn = snap.chosen.kcal
-    intakes = snap.intakes7
+    # Actual eating, sick days included: fasting while ill is itself a trigger.
+    intakes = snap.recent_intakes
     if burn and len(intakes) >= 3:
         deficit = 1 - statistics.fmean(intakes) / burn
         if deficit > 0:

@@ -11,10 +11,14 @@ before the slope is learned.
 Days without a weigh-in follow the slope for up to COAST_DAYS and then hold
 flat, so a long break can't carry the trend far from the last reading.
 
+Weigh-ins on sick and recovery days (`skip`, see sick.py) are water swings,
+so the trend steps over them like days without a weigh-in.
+
 Body fat % moves too slowly for the lag to matter and single scale readings are
 noisy, so it keeps the plain exponentially weighted moving average.
 """
 
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import date, timedelta
 from zoneinfo import ZoneInfo
@@ -121,10 +125,16 @@ def linear_trend(values: dict[date, float], alpha: float, end: date) -> dict[dat
     return out
 
 
-def weight_trend(weighins: list[Weighin], alpha: float, end: date) -> list[TrendPoint]:
+def weight_trend(
+    weighins: list[Weighin], alpha: float, end: date, skip: Collection[date] = ()
+) -> list[TrendPoint]:
+    """Trend for every day from the first weigh-in; `skip` days' weigh-ins don't move it."""
     by_day = {w.day: w for w in weighins}
-    weights = linear_trend({w.day: w.weight_kg for w in weighins}, alpha, end)
-    fats = ewma({w.day: w.body_fat_pct for w in weighins if w.body_fat_pct is not None}, alpha, end)
+    used = [w for w in weighins if w.day not in skip]
+    if not used:
+        return []
+    weights = linear_trend({w.day: w.weight_kg for w in used}, alpha, end)
+    fats = ewma({w.day: w.body_fat_pct for w in used if w.body_fat_pct is not None}, alpha, end)
     return [
         TrendPoint(
             day=d,

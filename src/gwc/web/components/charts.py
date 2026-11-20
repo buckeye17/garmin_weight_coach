@@ -36,6 +36,23 @@ def rgba(hex_color: str, alpha: float) -> str:
     return f"rgba({r},{g},{b},{alpha})"
 
 
+def weighin_marker(scheme: str | None, off: list[bool]) -> dict:
+    """Weigh-in dots, hollow on sick and recovery days (which the trend ignores)."""
+    muted = ink(scheme, "muted")
+    return {
+        "color": muted,
+        "size": 8,
+        "symbol": ["circle-open" if o else "circle" for o in off],
+        "line": {"color": muted, "width": [2 if o else 0 for o in off]},
+    }
+
+
+def off_note(off_days: dict, day) -> str:
+    """Hover suffix for a sick or recovery day, e.g. " · sick, left out"."""
+    status = off_days.get(day)
+    return f" · {status}, left out" if status else ""
+
+
 def figure(scheme: str | None, y_title: str = "", height: int = 300) -> go.Figure:
     text, grid = ink(scheme, "text"), ink(scheme, "grid")
     fig = go.Figure()

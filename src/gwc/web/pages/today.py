@@ -16,10 +16,10 @@ import dash_mantine_components as dmc
 from dash import ALL, MATCH, Input, Output, State, callback, ctx, dcc, html, no_update
 from dash.exceptions import PreventUpdate
 
-from gwc.analysis import exercise
+from gwc.analysis import exercise, sick
 from gwc.analysis.exercise import MAX_MANUAL_KCAL, Workout
 from gwc.analysis.food_day import current_food_day, food_days_around
-from gwc.analysis.targets import NO_GOAL, TargetPlan, day_targets
+from gwc.analysis.targets import NO_GOAL, TargetPlan, day_targets, refreeze_today
 from gwc.analysis.units import weight_unit
 from gwc.db.models import FoodLog, ManualActivity
 from gwc.db.session import session_scope
@@ -321,6 +321,12 @@ def layout(day: str | None = None, **_kwargs):
                                     label="Not fully logged (leave out of averages)",
                                     size="sm",
                                 ),
+                                dmc.Switch(
+                                    id="day-sick",
+                                    label="Sick (leave out of projections)",
+                                    size="sm",
+                                ),
+                                dmc.Text(id="day-sick-note", size="xs", c="dimmed"),
                             ],
                             gap="sm",
                         ),
@@ -486,6 +492,21 @@ def _activity_row(w: Workout, day: date):
     return dmc.UnstyledButton(row, id={"type": "act-row", "index": w.manual_id}, w="100%")
 
 
+def _sick_note(is_sick: bool, recovering: tuple[int, int] | None) -> str | None:
+    if is_sick:
+        return (
+            "Eat to appetite and rest. This day's intake, burn and weigh-in are left "
+            "out of projections and burn estimates, and so are the recovery days after."
+        )
+    if recovering:
+        k, n = recovering
+        return (
+            f"Recovery day {k} of {n} after being sick: appetite and water weight run "
+            "high, so this day is left out of projections too."
+        )
+    return None
+
+
 def _ring_stat(label: str, value: str, note: str | None = None) -> dmc.Stack:
     return dmc.Stack(
         [
@@ -588,6 +609,8 @@ def change_day(_prev, _next, _today, picked, selected):
     Output("day-add-btn", "children"),
     Output("day-entries-hint", "children"),
     Output("day-gout", "children"),
+    Output("day-sick", "checked"),
+    Output("day-sick-note", "children"),
     Input("day-selected", "data"),
     Input("edit-done", "data"),
 )
@@ -603,6 +626,8 @@ def render_day(selected, _edited):
         plan = day_targets(s, zone, now(), day)
         targets = plan.values
         incomplete = log.is_incomplete(s, day)
+        is_sick = log.is_sick(s, day)
+        recovering = sick.recovery_day(s, day)
         entry_rows = [_entry_row(e, day, day < today) for e in entries] or [
             dmc.Text("Nothing logged for this day yet.", size="sm", c="dimmed")
         ]
@@ -668,6 +693,8 @@ def render_day(selected, _edited):
         "Log food" if day == today else "Add to this day",
         "Tap one to change its amount or time" if day == today else "Tap to edit, + to log today",
         gout,
+        is_sick,
+        _sick_note(is_sick, recovering),
     )
 
 
@@ -736,6 +763,26 @@ def toggle_incomplete(checked, selected, done):
         if log.is_incomplete(s, day) == bool(checked):
             raise PreventUpdate
         log.set_incomplete(s, day, bool(checked))
+    return (done or 0) + 1
+
+
+@callback(
+    Output("edit-done", "data", allow_duplicate=True),
+    Input("day-sick", "checked"),
+    State("day-selected", "data"),
+    State("edit-done", "data"),
+    prevent_initial_call=True,
+)
+def toggle_sick(checked, selected, done):
+    if ctx.triggered_id != "day-sick":
+        raise PreventUpdate
+    with session_scope() as s:
+        day = date.fromisoformat(selected) if selected else current_food_day(s, tz(), now())
+        if log.is_sick(s, day) == bool(checked):
+            raise PreventUpdate
+        log.set_sick(s, day, bool(checked))
+    # Today's targets start from the burn estimates, which this changes.
+    refreeze_today(tz(), now())
     return (done or 0) + 1
 
 

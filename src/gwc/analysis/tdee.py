@@ -11,6 +11,12 @@
   a week later, since the first days of a diet shed water and glycogen that
   would otherwise read as fat loss.
 
+Sick and recovery days (sick.py) are left out of both. Garmin's average reaches
+back for 7 ordinary days. The adaptive fit drops their intake and weigh-ins, and
+each stretch of them splits the weigh-ins into segments that share one slope
+but each get their own level, so the water dip, its rebound, and any real change
+while ill don't move the slope.
+
 Both include whatever workouts you did. `exercise_kcal` is the average net
 workout burn over the same days, and `base_kcal` is the estimate without it:
 targets start from the base and add each day's own workouts (exercise.py).
@@ -92,7 +98,7 @@ def step_stats(days: list[DayRecord]) -> dict[str, float | None]:
 
 def garmin_tdee(ended: list[DayRecord], n: int = GARMIN_DAYS) -> TdeeEstimate:
     """`ended` is food days before today, oldest first."""
-    days = [d for d in ended if d.has_garmin][-n:]
+    days = [d for d in ended if d.has_garmin and d.typical][-n:]
     if not days:
         return TdeeEstimate("garmin", None, None, False, "No Garmin daily totals yet.")
     totals = [d.garmin_total for d in days]
@@ -112,17 +118,63 @@ def garmin_tdee(ended: list[DayRecord], n: int = GARMIN_DAYS) -> TdeeEstimate:
     )
 
 
-def linear_slope(points: list[tuple[float, float]]) -> tuple[float, float]:
-    """Least-squares slope and its standard error."""
-    n = len(points)
-    mx = statistics.fmean(x for x, _ in points)
-    my = statistics.fmean(y for _, y in points)
-    sxx = sum((x - mx) ** 2 for x, _ in points)
-    slope = sum((x - mx) * (y - my) for x, y in points) / sxx
-    if n <= 2:
+def _by_segment(
+    points: list[tuple[float, float]], segments: list[int] | None
+) -> list[list[tuple[float, float]]]:
+    groups: dict[int, list[tuple[float, float]]] = {}
+    for i, p in enumerate(points):
+        groups.setdefault(segments[i] if segments else 0, []).append(p)
+    return list(groups.values())
+
+
+def _sxx(group: list[tuple[float, float]]) -> float:
+    mx = statistics.fmean(x for x, _ in group)
+    return sum((x - mx) ** 2 for x, _ in group)
+
+
+def can_fit(points: list[tuple[float, float]], segments: list[int] | None = None) -> bool:
+    """Whether some segment has weigh-ins on two different days."""
+    return any(_sxx(g) > 0 for g in _by_segment(points, segments))
+
+
+def linear_slope(
+    points: list[tuple[float, float]], segments: list[int] | None = None
+) -> tuple[float, float]:
+    """Least-squares slope and its standard error.
+
+    With `segments` (one label per point), each segment gets its own intercept and
+    they share the slope: the pooled within-segment fit.
+    """
+    groups = _by_segment(points, segments)
+    sxx = sxy = 0.0
+    for g in groups:
+        mx = statistics.fmean(x for x, _ in g)
+        my = statistics.fmean(y for _, y in g)
+        sxx += sum((x - mx) ** 2 for x, _ in g)
+        sxy += sum((x - mx) * (y - my) for x, y in g)
+    slope = sxy / sxx
+    dof = len(points) - len(groups) - 1
+    if dof <= 0:
         return slope, 0.0
-    resid = sum((y - (my + slope * (x - mx))) ** 2 for x, y in points)
-    return slope, math.sqrt(resid / (n - 2) / sxx)
+    resid = 0.0
+    for g in groups:
+        mx = statistics.fmean(x for x, _ in g)
+        my = statistics.fmean(y for _, y in g)
+        resid += sum((y - my - slope * (x - mx)) ** 2 for x, y in g)
+    return slope, math.sqrt(resid / dof / sxx)
+
+
+def segments_of(days: list[DayRecord]) -> dict[date, int]:
+    """Segment number of each ordinary day: one more after each stretch of off days."""
+    out: dict[date, int] = {}
+    seg, prev_typical = 0, True
+    for d in days:
+        if d.typical:
+            out[d.day] = seg
+        elif prev_typical:
+            seg += 1
+        prev_typical = d.typical
+    return out
 
 
 def adaptive_history_days(window: int) -> int:
@@ -165,9 +217,14 @@ def adaptive_tdee(
     if not days:
         note = "settling after you started logging" if settling else "no food days yet"
         return TdeeEstimate("adaptive", None, None, False, f"Calibrating: {note}.")
-    first, last = days[0].day, days[-1].day
-    complete = [d.kcal for d in days if d.complete]
-    points = [((w.day - first).days, w.weight_kg) for w in weighins if first <= w.day <= last]
+    first = days[0].day
+    seg = segments_of(days)
+    ordinary = [d for d in days if d.typical]
+    off = len(days) - len(ordinary)
+    complete = [d.kcal for d in ordinary if d.complete]
+    used = [w for w in weighins if w.day in seg]
+    points = [((w.day - first).days, w.weight_kg) for w in used]
+    segments = [seg[w.day] for w in used]
     span = (points[-1][0] - points[0][0] + 1) if points else 0
 
     missing = []
@@ -175,6 +232,8 @@ def adaptive_tdee(
         missing.append(f"{len(complete)} of {ADAPTIVE_MIN_COMPLETE_DAYS} complete food days")
     if span < ADAPTIVE_MIN_SPAN_DAYS or len(points) < ADAPTIVE_MIN_WEIGHINS:
         missing.append(f"weigh-ins spanning {span} of {ADAPTIVE_MIN_SPAN_DAYS} days")
+    elif not can_fit(points, segments):
+        missing.append("two weigh-in days between sick spells")
     if missing:
         return TdeeEstimate(
             "adaptive",
@@ -189,7 +248,7 @@ def adaptive_tdee(
         )
 
     intake = statistics.fmean(complete)
-    slope, slope_se = linear_slope(points)
+    slope, slope_se = linear_slope(points, segments)
     kcal = intake - rho * slope
     se = math.hypot(_sd(complete) / math.sqrt(len(complete)), rho * slope_se)
     return TdeeEstimate(
@@ -198,12 +257,13 @@ def adaptive_tdee(
         se,
         True,
         f"From {len(complete)} complete food days and {len(points)} weigh-ins "
-        f"in the last {window} days.",
+        f"in the last {window} days"
+        + (f", leaving out {off} sick or recovery day{'s' * (off != 1)}." if off else "."),
         days_used=len(complete),
         intake_kcal=intake,
         slope_kg_per_week=slope * 7,
-        exercise_kcal=statistics.fmean(d.garmin_exercise + d.manual_exercise for d in days),
-        **step_stats(days),
+        exercise_kcal=statistics.fmean(d.garmin_exercise + d.manual_exercise for d in ordinary),
+        **step_stats(ordinary),
     )
 
 

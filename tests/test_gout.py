@@ -463,7 +463,7 @@ def test_gout_page_and_today_card_render(app, db):
     key = {"flare": fid, "day": utcnow().astimezone(NY).date().isoformat()}
     assert gout.save_day(1, key, "4", [], "", 0)[0] is False
 
-    card = today.render_day(None, 0)[-1]
+    card = today.render_day(None, 0)[19]
     text = str(card)
     assert "Gout triggers" in text and "how bad is it today" in text and "It's over" in text
     assert "'label': 'None'" not in text

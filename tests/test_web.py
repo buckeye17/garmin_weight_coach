@@ -207,8 +207,27 @@ def test_only_past_entries_can_be_logged_for_today(seeded):
         )
     yesterday = (current - timedelta(days=1)).isoformat()  # i=1 in `seeded` has an entry
     past, now_ = today.render_day(yesterday, 0), today.render_day(None, 0)
-    assert "entry-repeat" in str(past[8]) and "+ to log today" in past[-2]
+    assert "entry-repeat" in str(past[8]) and "+ to log today" in past[18]
     assert "entry-row" in str(now_[8]) and "entry-repeat" not in str(now_[8])
+
+
+def test_today_sick_switch_and_recovery_note(seeded):
+    from datetime import timedelta
+
+    from gwc.analysis.food_day import current_food_day
+    from gwc.db.session import session_scope
+    from gwc.db.types import utcnow
+    from gwc.nutrition import log
+    from gwc.web.components.common import tz
+    from gwc.web.pages import today
+
+    with session_scope() as s:
+        current = current_food_day(s, tz(), utcnow())
+        log.set_sick(s, current - timedelta(days=2), True)
+    two_ago = (current - timedelta(days=2)).isoformat()
+    sick_day, recovering = today.render_day(two_ago, 0), today.render_day(None, 0)
+    assert sick_day[-2] is True and "left out" in sick_day[-1]
+    assert recovering[-2] is False and "Recovery day 2 of 3" in recovering[-1]
 
 
 def test_analysis_callbacks_render_empty(app, isolated_settings):

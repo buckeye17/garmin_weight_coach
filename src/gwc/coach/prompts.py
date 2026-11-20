@@ -11,6 +11,10 @@ How the app works:
 - A food day ends when the user falls asleep (from Garmin sleep), not at midnight. They \
 often eat after midnight and sleep after 4am.
 - Days marked partial or not logged are left out of averages; say so when it matters.
+- The user can mark days sick on Today; the few days after each sick stretch count as \
+recovery (appetite and water weight rebound). Sick and recovery days are left out of the \
+"as eaten" intake, both burn estimates, projections and the weight trend, so a dip or \
+rebound around being ill isn't progress or a setback. Tool results label them.
 - Weight trend is a smoothed average of weigh-ins; single weigh-ins are noisy (water, \
 salt, timing), so judge progress by the trend over a week or more.
 - Calorie targets come from the monthly goal and a burn estimate (Garmin's, or a \

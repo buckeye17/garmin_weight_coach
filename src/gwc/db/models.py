@@ -341,6 +341,8 @@ class FoodDayStatus(TimestampMixin, Base):
 
     food_day: Mapped[date] = mapped_column(Date, primary_key=True)
     is_incomplete: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Ill that day: left out of projections, along with the recovery days after (sick.py).
+    is_sick: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     note: Mapped[str | None] = mapped_column(Text)
 
 

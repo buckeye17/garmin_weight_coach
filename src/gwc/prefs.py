@@ -17,6 +17,8 @@ DEFAULTS: dict[str, Any] = {
     "analysis.kcal_per_kg_lost": 22.0,
     "analysis.max_weekly_loss_pct": 1.0,
     "analysis.adaptive_window_days": 21,
+    # Days after each stretch of sick days that are left out of projections too.
+    "analysis.sick_recovery_days": 3,
     # Share of each day's net Garmin workout kcal added to that day's calorie target.
     "targets.exercise_eat_back_pct": 75,
     # Share of each day's active kcal outside workouts, above your usual, added likewise.

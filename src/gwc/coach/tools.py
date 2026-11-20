@@ -104,6 +104,12 @@ def get_overview(_args: dict[str, Any]) -> dict[str, Any]:
         "mean_intake_last_7_complete": (
             _r(sum(snap.intakes7) / len(snap.intakes7), 0) if snap.intakes7 else None
         ),
+        "last_7_skip_sick_and_recovery_days": True,
+        "sick_or_recovering_last_14_days": {
+            d.isoformat(): v
+            for d, v in sorted(snap.off_days.items())
+            if d > snap.today - timedelta(days=14)
+        },
     }
 
 
@@ -121,6 +127,8 @@ def get_weight_trend(args: dict[str, Any]) -> dict[str, Any]:
                 "trend": _w(p.trend_kg),
                 "body_fat_pct": _r(p.body_fat_pct),
                 "body_fat_trend_pct": _r(p.fat_trend_pct),
+                # Sick or recovering: that day's weigh-in doesn't move the trend.
+                **({"health": snap.off_days[p.day]} if p.day in snap.off_days else {}),
             }
             for p in snap.trend
             if p.day > since
@@ -175,6 +183,7 @@ def get_daily_nutrition(args: dict[str, Any]) -> dict[str, Any]:
                 else "not logged"
             ),
             "entries": d.entries,
+            **({"health": d.status, "left_out_of_projections": True} if d.status else {}),
             "intake": {k: _r(v, 0) for k, v in d.intake.items()} if d.intake else None,
             "garmin_total_burn": _r(d.garmin_total, 0),
             "garmin_burn_provisional": d.garmin_provisional,
@@ -199,6 +208,7 @@ def get_food_entries(args: dict[str, Any]) -> dict[str, Any]:
             "ends": end.astimezone(tz).strftime("%Y-%m-%d %H:%M"),
             "ends_at_sleep": from_sleep,
             "marked_incomplete": log.is_incomplete(s, day),
+            "marked_sick": log.is_sick(s, day),
             "entries": [
                 {
                     "entry_id": e.id,

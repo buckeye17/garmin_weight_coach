@@ -53,13 +53,15 @@ def layout(**_kwargs):
                     _chart_card(
                         "Weight",
                         "trends-weight",
-                        "Dots are daily weigh-ins; the line is the smoothed trend.",
+                        "Dots are daily weigh-ins; the line is the smoothed trend. Hollow "
+                        "dots are sick or recovery days, which the trend ignores.",
                     ),
                     _chart_card("Body fat", "trends-fat", "Scale readings and smoothed trend."),
                     _chart_card(
                         "Eaten vs. Garmin burn",
                         "trends-kcal",
-                        "Faded bars are days marked as not fully logged.",
+                        "Faded bars are days marked as not fully logged; hatched ones are "
+                        "sick or recovery days.",
                     ),
                     _chart_card("Sleep", "trends-sleep"),
                     _chart_card("Steps", "trends-steps"),
@@ -112,8 +114,9 @@ def _weight_fig(snap: Snapshot, start: date, unit: WeightUnit, scheme) -> go.Fig
         y=[kg_to(w.weight_kg, unit) for w in raw],
         mode="markers",
         name="Weigh-in",
-        marker={"color": charts.ink(scheme, "muted"), "size": 8},
-        hovertemplate="Weigh-in %{y:.1f}<extra></extra>",
+        marker=charts.weighin_marker(scheme, [w.day in snap.off_days for w in raw]),
+        customdata=[charts.off_note(snap.off_days, w.day) for w in raw],
+        hovertemplate="Weigh-in %{y:.1f}%{customdata}<extra></extra>",
     )
     fig.update_layout(showlegend=False)
     return fig
@@ -136,8 +139,9 @@ def _fat_fig(snap: Snapshot, start: date, scheme) -> go.Figure:
         x=[w.day for w in raw],
         y=[w.body_fat_pct for w in raw],
         mode="markers",
-        marker={"color": charts.ink(scheme, "muted"), "size": 8},
-        hovertemplate="Reading %{y:.1f}%<extra></extra>",
+        marker=charts.weighin_marker(scheme, [w.day in snap.off_days for w in raw]),
+        customdata=[charts.off_note(snap.off_days, w.day) for w in raw],
+        hovertemplate="Reading %{y:.1f}%%{customdata}<extra></extra>",
     )
     fig.update_layout(showlegend=False)
     return fig
@@ -157,8 +161,11 @@ def _kcal_fig(snap: Snapshot, start: date, targets: dict[date, float], scheme) -
         marker={
             "color": [blue if d.complete else charts.rgba(blue, 0.35) for d in logged],
             "cornerradius": 4,
+            # Hatched: sick or recovering, so left out of projections.
+            "pattern": {"shape": ["/" if not d.typical else "" for d in logged]},
         },
-        hovertemplate="Eaten %{y:,.0f}<extra></extra>",
+        customdata=[charts.off_note(snap.off_days, d.day) for d in logged],
+        hovertemplate="Eaten %{y:,.0f}%{customdata}<extra></extra>",
     )
     burned = [d for d in days if d.garmin_total is not None]
     fig.add_scatter(

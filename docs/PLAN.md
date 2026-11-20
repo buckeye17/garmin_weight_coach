@@ -160,6 +160,9 @@ The user eats past midnight and usually sleeps after 04:00, so a food day is not
 - Entries store raw UTC timestamps and the time zone. Food day is **computed, not stored**, so entries near a boundary move to the correct day once sleep data arrives. Boundaries are computed on the fly from `sleep` (cheap enough that no cache table is needed). A sleep only counts if it starts between 12:00 on D and 18:00 on D+1.
 - Any single entry can be manually pinned to a specific food day.
 - A food day can be marked **incomplete** (partially logged) so it is excluded from averages.
+- A food day can be marked **sick**. Sick days and the few recovery days after each stretch
+  (Settings, default 3) are left out of the "as eaten" intake, both burn estimates, projections
+  and the weight trend: illness and its rebound swing appetite, activity and water weight.
 - Garmin daily totals are per calendar day and are mapped to the food day of the same date. The few post-midnight hours land in the next calendar day; over 7-day averages this mostly cancels out.
 
 ---
@@ -335,5 +338,6 @@ Each milestone ends with tests passing and a commit pushed to `main`.
 | Unofficial access is against Garmin's ToS | Low-volume personal use only |
 | Garmin calorie burn is inaccurate | Adaptive TDEE method shown alongside |
 | Partial food logging biases estimates | "Incomplete" day flag, completeness warnings |
+| Illness skews intake, burn and weigh-ins | "Sick" day flag plus automatic recovery days, left out of estimates |
 | Anthropic changes subscription/SDK terms | `api` backend available behind the same interface |
 | Personal data accidentally committed | Everything under `data/` and `.env` git-ignored from the first code commit; fixtures are synthetic |
