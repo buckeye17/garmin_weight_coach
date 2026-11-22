@@ -6,6 +6,7 @@ import dash_mantine_components as dmc
 
 from gwc.db.models import GoutDay, GoutFlare
 from gwc.gout import flares
+from gwc.gout.tips import FLARE_TIPS
 from gwc.gout.triggers import LEVEL_COLORS, LEVEL_LABELS, Factor, Level, Lookback, Report
 from gwc.web.components.common import fmt_clock, icon
 from gwc.web.format import fmt_day
@@ -76,6 +77,52 @@ def severity_guide() -> dmc.Stack:
         for n, (label, feels) in flares.SEVERITY.items()
     ]
     return dmc.Stack(rows, gap=6)
+
+
+def flare_tips(opened: bool = False) -> dmc.Accordion:
+    """Quick reminders of what helps during a flare, folded away unless `opened`."""
+    sections = []
+    for heading, name, color, tips in FLARE_TIPS:
+        sections.append(
+            dmc.Stack(
+                [
+                    dmc.Group(
+                        [
+                            dmc.ThemeIcon(icon(name, 14), color=color, variant="light", size="sm"),
+                            dmc.Text(heading, size="sm", fw=600),
+                        ],
+                        gap=6,
+                    ),
+                    dmc.List(
+                        [dmc.ListItem(t) for t in tips],
+                        size="sm",
+                        spacing=2,
+                        withPadding=True,
+                    ),
+                ],
+                gap=4,
+            )
+        )
+    sections.append(
+        dmc.Text("General advice; follow your doctor's if it differs.", size="xs", c="dimmed")
+    )
+    return dmc.Accordion(
+        dmc.AccordionItem(
+            [
+                dmc.AccordionControl(
+                    "Quick tips for a flare",
+                    icon=icon("tabler:bulb", 16),
+                    fz="sm",
+                    fw=500,
+                ),
+                dmc.AccordionPanel(dmc.Stack(sections, gap="sm")),
+            ],
+            value="tips",
+        ),
+        value="tips" if opened else None,
+        variant="contained",
+        chevronPosition="right",
+    )
 
 
 def factor_row(f: Factor) -> dmc.Group:
@@ -312,6 +359,7 @@ def today_card(
             severity_legend(),
         ]
         children.append(dmc.Paper(dmc.Stack(rows, gap=6), p="xs", withBorder=True))
+        children.append(flare_tips())
     children.append(
         dmc.Anchor(
             dmc.Group([icon("tabler:flame", 14), "Flares and details"], gap=4),

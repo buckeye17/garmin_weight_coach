@@ -483,6 +483,18 @@ def test_gout_page_and_today_card_render(app, db):
     active = str(gout.render(0)[1])
     assert "gout-day-sev" in active
 
+    # Quick tips ride along with an active flare: open on the Gout page, folded on Today.
+    assert "Quick tips for a flare" in active and "low-fat milk" in active.lower()
+    assert "value='tips'" in active
+    with session_scope() as s:
+        flare = flares.load_flare(s, fid)
+        text = str(today_card(None, flare, later, later))
+        assert "Quick tips for a flare" in text and "red meat" in text.lower()
+        assert "Quick tips" not in str(today_card(None, flare, later, None))
+    with session_scope() as s:
+        flares.end_flare(s, fid, flares.start_day(flares.load_flare(s, fid)))
+    assert "Quick tips" not in str(gout.render(0)[1])
+
 
 def test_moving_a_flare_start(db):
     start = datetime(2026, 11, 6, 0, 2, tzinfo=NY)

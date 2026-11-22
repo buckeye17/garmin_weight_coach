@@ -35,6 +35,7 @@ from gwc.web.components.gout_panels import (
     day_entry,
     factor_row,
     flare_summary,
+    flare_tips,
     flare_title,
     level_badge,
     lookback_panel,
@@ -385,6 +386,7 @@ def _active_panel(flare, lb, today: date) -> list:
             size="xs",
             c="dimmed",
         ),
+        flare_tips(opened=True),
         dmc.Divider(),
         lookback_panel(lb, today),
     ]
