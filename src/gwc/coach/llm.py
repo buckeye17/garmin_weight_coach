@@ -300,8 +300,8 @@ class SubscriptionBackend:
 
 def _assistant_error(kind: str) -> str:
     return {
-        "authentication_failed": "Claude login failed. Run `claude` in a terminal and log in "
-        "with your Max account, then try again.",
+        "authentication_failed": "Claude login failed or expired. Run `claude` in a terminal "
+        "and log in with your Max account (or set a `claude setup-token` token), then try again.",
         "billing_error": "Your Claude plan reported a billing problem.",
         "rate_limit": "You've hit your Claude plan's usage limit for now. Try again later.",
         "server_error": "Claude is having trouble right now. Try again shortly.",

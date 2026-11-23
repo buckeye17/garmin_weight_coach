@@ -73,7 +73,15 @@ systemctl --user daemon-reload && systemctl --user enable --now gwc
 sudo loginctl enable-linger "$USER"        # start at boot without logging in
 ```
 
-For the subscription coach backend, log in once with the Claude Code CLI bundled in the venv (`.venv/lib/python3.12/site-packages/claude_agent_sdk/_bundled/claude`, then `/login`). To move from another PC, stop the app there and copy `.env`, `data/gwc.db` and `data/garmin_tokens/`. After pulling new code, run `systemctl --user restart gwc`; logs are in `data/logs/gwc.log` and `journalctl --user -u gwc`. For Tailscale Serve without sudo, run `sudo tailscale set --operator=$USER` once.
+For the subscription coach backend, use the Claude Code CLI bundled in the venv (`.venv/lib/python3.12/site-packages/claude_agent_sdk/_bundled/claude`). A `/login` works, but its sign-in expires every so often and the coach then fails with "Claude login failed". For a login that lasts a year, run that CLI with `setup-token`, then save the token where the service reads it:
+
+```bash
+mkdir -p ~/.config/gwc && chmod 700 ~/.config/gwc
+read -rsp "Token: " t && printf "CLAUDE_CODE_OAUTH_TOKEN=%s\n" "$t" > ~/.config/gwc/claude.env && chmod 600 ~/.config/gwc/claude.env
+systemctl --user restart gwc
+```
+
+The token is tied to your Max plan, like `/login`; the app still never uses an API key. To move from another PC, stop the app there and copy `.env`, `data/gwc.db` and `data/garmin_tokens/`. After pulling new code, run `systemctl --user restart gwc`; logs are in `data/logs/gwc.log` and `journalctl --user -u gwc`. For Tailscale Serve without sudo, run `sudo tailscale set --operator=$USER` once.
 
 ## Phone access with Tailscale
 

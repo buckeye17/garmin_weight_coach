@@ -5,6 +5,8 @@
 #   systemctl --user daemon-reload && systemctl --user enable --now gwc
 #   sudo loginctl enable-linger "$USER"   # keep it running while logged out and start at boot
 # Assumes the checkout is at ~/git_repos/garmin_weight_coach and uv is in ~/.local/bin.
+# Optional: CLAUDE_CODE_OAUTH_TOKEN=<token from `claude setup-token`> in ~/.config/gwc/claude.env
+# (chmod 600) keeps the coach signed in for a year; see README.
 
 [Unit]
 Description=Garmin Weight Coach
@@ -14,6 +16,7 @@ After=network-online.target
 [Service]
 WorkingDirectory=%h/git_repos/garmin_weight_coach
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=-%h/.config/gwc/claude.env
 ExecStart=%h/.local/bin/uv run --no-dev gwc serve
 Restart=on-failure
 RestartSec=30
