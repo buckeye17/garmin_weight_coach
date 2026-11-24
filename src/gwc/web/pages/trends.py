@@ -12,6 +12,7 @@ from gwc.analysis.targets import frozen_targets
 from gwc.analysis.units import WeightUnit, kg_to, weight_unit
 from gwc.db.models import Activity, BodyComp, DailySummary, Sleep
 from gwc.db.session import session_scope
+from gwc.gout import daily, flares
 from gwc.web.components import charts
 from gwc.web.components.common import card, now, page_header, tz
 from gwc.web.format import fmt_day
@@ -62,6 +63,13 @@ def layout(**_kwargs):
                         "trends-kcal",
                         "Faded bars are days marked as not fully logged; hatched ones are "
                         "sick days.",
+                    ),
+                    _chart_card(
+                        "Purines",
+                        "trends-purines",
+                        "Estimated purines eaten each day; meat and seafood matter most for "
+                        "gout. Dotted lines mark 400 mg (a low-purine diet) and 1,000 mg "
+                        "(more than a typical diet). Shaded spans are flares.",
                     ),
                     _chart_card("Sleep", "trends-sleep"),
                     _chart_card("Steps", "trends-steps"),
@@ -191,6 +199,72 @@ def _kcal_fig(snap: Snapshot, start: date, targets: dict[date, float], scheme) -
     return fig
 
 
+def _purines_fig(s, start: date, end: date, scheme) -> go.Figure:
+    days = daily.daily_purines(s, tz(), start, end)
+    if not days:
+        return charts.empty(scheme, "No food logged in this range.")
+    fig = charts.figure(scheme, y_title="mg")
+    x = [d.day for d in days]
+    notes = []
+    for d in days:
+        total = d.exposure.purine_mg
+        note = f"Total {total:,.0f} mg · {daily.band(total)}"
+        if d.unestimated:
+            note += f" · {d.unestimated} not estimated yet"
+        notes.append(note)
+    fig.add_bar(
+        x=x,
+        y=[d.exposure.animal_purine_mg for d in days],
+        name="Meat & seafood",
+        marker={"color": charts.series(scheme, 1)},
+        customdata=notes,
+        hovertemplate="Meat & seafood %{y:,.0f} mg<br>%{customdata}<extra></extra>",
+    )
+    fig.add_bar(
+        x=x,
+        y=[d.exposure.plant_purine_mg for d in days],
+        name="Plant & other",
+        marker={"color": charts.series(scheme, 2)},
+        hovertemplate="Plant & other %{y:,.0f} mg<extra></extra>",
+    )
+    muted = charts.ink(scheme, "muted")
+    low, high = daily.DAILY_LOW_MAX, daily.DAILY_HIGH
+    top = max(high * 1.2, max(d.exposure.purine_mg for d in days) * 1.08)
+    for y in (low, high):
+        fig.add_hline(y=y, line={"color": muted, "width": 1.5, "dash": "dot"})
+    # Band names sit in the right margin, clear of the bars.
+    for y, label in ((low / 2, "Low"), ((low + high) / 2, "Moderate"), ((high + top) / 2, "High")):
+        fig.add_annotation(
+            text=label,
+            xref="paper",
+            x=1,
+            xshift=6,
+            y=y,
+            xanchor="left",
+            showarrow=False,
+            font={"size": 11, "color": muted},
+        )
+    for flare in flares.list_flares(s):
+        span = flares.flare_dates(flare, end)
+        if span[-1] < start or span[0] > end:
+            continue
+        fig.add_vrect(
+            x0=max(span[0], start) - timedelta(hours=12),
+            x1=min(span[-1], end) + timedelta(hours=12),
+            fillcolor=charts.rgba(muted, 0.18),
+            line_width=0,
+            layer="below",
+        )
+    fig.update_yaxes(range=[0, top])
+    fig.update_layout(
+        barmode="stack",
+        barcornerradius=4,
+        legend={"traceorder": "normal"},
+        margin={"r": 70},
+    )
+    return fig
+
+
 def _sleep_fig(s, start: date, end: date, scheme) -> go.Figure:
     rows = s.scalars(
         select(Sleep)
@@ -274,6 +348,7 @@ def _activities(s, start: date):
     Output("trends-kcal", "figure"),
     Output("trends-sleep", "figure"),
     Output("trends-steps", "figure"),
+    Output("trends-purines", "figure"),
     Output("trends-activities", "children"),
     Input("trends-range", "value"),
     Input("color-scheme", "data"),
@@ -287,6 +362,7 @@ def render(range_key, scheme):
         snap = build_snapshot(s, zone, at, history_days=(today - start).days)
         targets = frozen_targets(s, zone, start, snap.today)
         sleep = _sleep_fig(s, start, snap.today, scheme)
+        purines = _purines_fig(s, start, snap.today, scheme)
         activities = _activities(s, start)
     figs = [
         _weight_fig(snap, start, unit, scheme),
@@ -294,6 +370,7 @@ def render(range_key, scheme):
         _kcal_fig(snap, start, targets, scheme),
         sleep,
         _steps_fig(snap, start, scheme),
+        purines,
     ]
     for fig in figs:
         if fig.layout.xaxis.visible is not False:

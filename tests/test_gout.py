@@ -19,7 +19,7 @@ from gwc.db.models import (
     RecipeItem,
 )
 from gwc.db.session import session_scope
-from gwc.gout import estimate, flares, profiles, triggers
+from gwc.gout import daily, estimate, flares, profiles, triggers
 from gwc.gout.triggers import Level
 
 NY = ZoneInfo("America/New_York")
@@ -104,6 +104,31 @@ def test_food_profile_scales_and_entry_profile_wins(db):
 def test_values_are_clamped():
     assert profiles.clean_values(-5, 50, 200) == (0.0, 0.0, 80.0)
     assert profiles.clean_values(100, 150, None) == (100.0, 100.0, 0.0)
+
+
+def test_daily_purines_sum_each_food_day(db):
+    with session_scope() as s:
+        liver = food(s, "Liver")
+        lentils = food(s, "Lentils")
+        profile(s, liver, 300, 300)
+        profile(s, lentils, 100)
+        entry(s, liver, 100, NOW)
+        entry(s, lentils, 200, NOW + timedelta(hours=1))
+        entry(s, None, 150, NOW + timedelta(hours=2))  # not estimated yet
+        entry(s, lentils, 50, NOW + timedelta(days=2))
+        today = NOW.astimezone(NY).date()
+        days = daily.daily_purines(s, NY, today, today + timedelta(days=3))
+    assert [d.day for d in days] == [today, today + timedelta(days=2)]  # logged days only
+    first = days[0]
+    assert first.exposure.purine_mg == pytest.approx(500)
+    assert first.exposure.animal_purine_mg == pytest.approx(300)
+    assert first.unestimated == 1
+    assert [daily.band(v) for v in (400, 401, 1000, 1001)] == [
+        "Low",
+        "Moderate",
+        "Moderate",
+        "High",
+    ]
 
 
 def test_recipe_uses_ingredients(db):

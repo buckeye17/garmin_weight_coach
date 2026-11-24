@@ -137,11 +137,12 @@ def test_weight_trend_tracks_body_fat_separately():
     ws = [Weighin(day(0), 100, None), Weighin(day(1), 99, 30.0), Weighin(day(2), 98, 32.0)]
     pts = weight_trend(ws, 0.5, day(3))
     assert pts[0].fat_trend_pct is None and pts[0].fat_kg is None
-    assert pts[2].fat_trend_pct == pytest.approx(31.0)
+    assert pts[2].fat_trend_pct == pytest.approx(31.5)  # level and slope, like weight
     assert pts[3].weight_kg is None
     assert pts[2].trend_kg == pytest.approx(98.25)
     assert pts[3].trend_kg == pytest.approx(97.75)  # no weigh-in: follows the slope
-    assert pts[3].fat_kg == pytest.approx(pts[3].trend_kg * 0.31)
+    assert pts[3].fat_trend_pct == pytest.approx(32.0)  # follows the slope too
+    assert pts[3].fat_kg == pytest.approx(pts[3].trend_kg * 0.32)
 
 
 def test_daily_weighins_average_by_local_day(db):

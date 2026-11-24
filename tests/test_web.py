@@ -237,7 +237,7 @@ def test_analysis_callbacks_render_empty(app, isolated_settings):
     upgrade()
     out = projection.render(None)
     assert out[1] == "—" and out[10] is None
-    assert len(trends.render("90", None)) == 6
+    assert len(trends.render("90", None)) == 7
 
 
 def test_log_library_sort(app, isolated_settings):
