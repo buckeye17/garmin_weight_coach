@@ -6,6 +6,7 @@ typical Western diet runs around 600–1,000 mg, so a day above 1,000 mg is more
 than even an ordinary diet supplies.
 """
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
 from zoneinfo import ZoneInfo
@@ -13,6 +14,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
 
 from gwc.analysis.food_day import FoodDays
+from gwc.db.models import FoodLog
 from gwc.gout.profiles import Exposure, ProfileBook
 from gwc.nutrition import log
 
@@ -33,18 +35,22 @@ def band(mg: float) -> str:
     return "Moderate" if mg > DAILY_LOW_MAX else "Low"
 
 
+def day_purines(book: ProfileBook, day: date, entries: Iterable[FoodLog]) -> PurineDay:
+    total, missing = Exposure(), 0
+    for e in entries:
+        x = book.exposure(e)
+        if x is None:
+            missing += 1
+        else:
+            total += x
+    return PurineDay(day, total, missing)
+
+
 def daily_purines(s: Session, tz: ZoneInfo, start: date, end: date) -> list[PurineDay]:
     """One record per food day from `start` through `end` that has anything logged."""
     days = FoodDays.load(s, tz, start, end)
     book = ProfileBook(s)
-    out = []
-    for day, entries in sorted(log.entries_by_day(s, start, end, days).items()):
-        total, missing = Exposure(), 0
-        for e in entries:
-            x = book.exposure(e)
-            if x is None:
-                missing += 1
-            else:
-                total += x
-        out.append(PurineDay(day, total, missing))
-    return out
+    return [
+        day_purines(book, day, entries)
+        for day, entries in sorted(log.entries_by_day(s, start, end, days).items())
+    ]

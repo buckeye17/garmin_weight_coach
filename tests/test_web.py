@@ -181,6 +181,7 @@ def test_analysis_callbacks_render(seeded):
     rendered = today.render_day(None, 0)
     assert "kcal" in rendered[4]  # where the calorie target came from
     assert rendered[5] == "block"  # no goal set → maintenance hint
+    assert "Purines" in str(rendered[12]) and "0 mg" in str(rendered[12])  # none estimated
 
 
 def test_only_past_entries_can_be_logged_for_today(seeded):

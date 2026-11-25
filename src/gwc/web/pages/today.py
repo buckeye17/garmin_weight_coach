@@ -23,7 +23,8 @@ from gwc.analysis.targets import NO_GOAL, TargetPlan, day_targets, refreeze_toda
 from gwc.analysis.units import weight_unit
 from gwc.db.models import FoodLog, ManualActivity
 from gwc.db.session import session_scope
-from gwc.gout import flares, triggers
+from gwc.gout import daily, flares, triggers
+from gwc.gout.profiles import ProfileBook
 from gwc.nutrition import foods, log
 from gwc.web.components.analysis_text import flag_messages, plan_summary
 from gwc.web.components.common import (
@@ -513,6 +514,17 @@ def _ring_stat(label: str, value: str, note: str | None = None) -> dmc.Stack:
     )
 
 
+def _purine_stat(p: daily.PurineDay) -> dmc.Stack:
+    """The day's estimated purines, rated with the Trends chart's daily bands."""
+    total = p.exposure.purine_mg
+    note = daily.band(total)
+    if total >= 1:
+        note += f" · {p.exposure.animal_purine_mg:,.0f} from meat & seafood"
+    if p.unestimated:
+        note += f" · {p.unestimated} not estimated yet"
+    return _ring_stat("Purines", f"{total:,.0f} mg", note)
+
+
 def _activity_note(plan: TargetPlan) -> str | None:
     """E.g. "2,100 base + 380 workouts + 40 steps": what the day's activity adds to base."""
     base = plan.base_values.get("kcal")
@@ -618,6 +630,7 @@ def render_day(selected, _edited):
         start, (end, from_sleep) = fd.start_of(day), fd.end_of(day)
         entries = log.entries_for_day(s, day, fd)
         totals = log.totals(entries)
+        purines = daily.day_purines(ProfileBook(s), day, entries)
         plan = day_targets(s, zone, now(), day)
         targets = plan.values
         incomplete = log.is_incomplete(s, day)
@@ -659,6 +672,7 @@ def render_day(selected, _edited):
         )
 
     ring, remaining, ring_stats = _calorie_ring(totals, plan, len(entries))
+    ring_stats.append(_purine_stat(purines))
     unit = weight_unit()
     hint = []
     if NO_GOAL in plan.flags and "kcal" not in plan.overridden:
